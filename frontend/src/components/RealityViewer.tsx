@@ -3,18 +3,20 @@
 import { useEffect, useRef, useState } from "react";
 import { API_BASE } from "@/lib/api";
 
-type Props = { sceneId: string };
+type Props = { sceneId: string; anime?: boolean };
 
-export default function RealityViewer({ sceneId }: Props) {
+export default function RealityViewer({ sceneId, anime = true }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<{ dispose?: () => void } | null>(null);
   const [status, setStatus] = useState("Loading reconstruction…");
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [cameraCount, setCameraCount] = useState(0);
+  const styleCanvasRef = useRef<HTMLCanvasElement>(null);
   const [driving, setDriving] = useState(true);
   const posesRef = useRef<Array<{ C: number[]; fwd: number[] }>>([]);
   const driveRef = useRef({ t: 0, raf: 0 as number, driving: true });
+  const styleStopRef = useRef<null | (() => void)>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -47,7 +49,17 @@ export default function RealityViewer({ sceneId }: Props) {
           /* fall back to the origin view */
         }
 
+        // preserveDrawingBuffer is required to sample the splat canvas as a
+        // texture for the stylisation pass; without it the buffer is cleared
+        // before we can read it and the overlay shows black.
+        const THREE = await import("three");
+        const renderer = new THREE.WebGLRenderer({
+          antialias: false,
+          preserveDrawingBuffer: true,
+        });
+
         viewer = new GS.Viewer({
+          renderer,
           rootElement: container.current,
           // COLMAP is Y-down; without this the street loads upside down.
           cameraUp: [0, -1, 0],
@@ -77,6 +89,21 @@ export default function RealityViewer({ sceneId }: Props) {
         viewer.start();
         setReady(true);
         setStatus("");
+
+        // Cel-shade the rendered splat. This is the point of the mode: a
+        // weakly-constrained reconstruction reads as broken when it claims
+        // photorealism, but as deliberate art direction once the whole scene is
+        // stylised -- while keeping what photographs cannot give, namely a real
+        // 3D scene with a moving camera, depth and parallax.
+        if (anime) {
+          const src = renderer.domElement as HTMLCanvasElement;
+          const out = styleCanvasRef.current;
+          if (out) {
+            const { attachAnimeFilter } = await import("@/lib/animeFilter");
+            const stop = attachAnimeFilter(src, out);
+            styleStopRef.current = stop;
+          }
+        }
 
         // Drive the camera along the reconstructed trajectory instead of
         // offering free orbit. The imagery is forward-motion only, so surfaces
@@ -127,6 +154,7 @@ export default function RealityViewer({ sceneId }: Props) {
     return () => {
       cancelled = true;
       if (driveRef.current.raf) cancelAnimationFrame(driveRef.current.raf);
+      styleStopRef.current?.();
       try {
         viewer?.dispose?.();
       } catch {
@@ -137,7 +165,13 @@ export default function RealityViewer({ sceneId }: Props) {
 
   return (
     <div className="relative h-full w-full bg-[#05070c]">
-      <div ref={container} className="h-full w-full" />
+      <div
+        ref={container}
+        className={`h-full w-full ${anime ? "invisible absolute inset-0" : ""}`}
+      />
+      {anime && (
+        <canvas ref={styleCanvasRef} className="absolute inset-0 h-full w-full" />
+      )}
 
       {!ready && !error && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
