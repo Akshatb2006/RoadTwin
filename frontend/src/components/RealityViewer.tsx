@@ -12,6 +12,9 @@ export default function RealityViewer({ sceneId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [cameraCount, setCameraCount] = useState(0);
+  const [driving, setDriving] = useState(true);
+  const posesRef = useRef<Array<{ C: number[]; fwd: number[] }>>([]);
+  const driveRef = useRef({ t: 0, raf: 0 as number, driving: true });
 
   useEffect(() => {
     let cancelled = false;
@@ -38,6 +41,7 @@ export default function RealityViewer({ sceneId }: Props) {
             position = cams.initial.position;
             lookAt = cams.initial.lookAt;
             setCameraCount(cams.count ?? 0);
+            posesRef.current = cams.cameras ?? [];
           }
         } catch {
           /* fall back to the origin view */
@@ -68,6 +72,42 @@ export default function RealityViewer({ sceneId }: Props) {
         viewer.start();
         setReady(true);
         setStatus("");
+
+        // Drive the camera along the reconstructed trajectory instead of
+        // offering free orbit. The imagery is forward-motion only, so surfaces
+        // are well constrained along the driven path and badly constrained
+        // away from it -- a free camera asks the splat questions the source
+        // photographs never answered. Riding the path shows the reconstruction
+        // where it is strongest, and is the natural shot for a road anyway.
+        const poses = posesRef.current;
+        if (poses.length > 2) {
+          const lerp = (a: number[], b: number[], t: number) =>
+            a.map((v, i) => v + (b[i] - v) * t);
+          const step = () => {
+            driveRef.current.raf = requestAnimationFrame(step);
+            if (!driveRef.current.driving) return;
+            // ~9 s for the full corridor, looping.
+            driveRef.current.t = (driveRef.current.t + 0.0022) % 1;
+            const f = driveRef.current.t * (poses.length - 1);
+            const i = Math.floor(f);
+            const frac = f - i;
+            const a = poses[i];
+            const b = poses[Math.min(i + 1, poses.length - 1)];
+            const C = lerp(a.C, b.C, frac);
+            const fwd = lerp(a.fwd, b.fwd, frac);
+            const target = C.map((v, k) => v + fwd[k] * 6);
+            try {
+              viewer.camera.position.set(C[0], C[1], C[2]);
+              viewer.camera.lookAt(target[0], target[1], target[2]);
+              if (viewer.controls) {
+                viewer.controls.target.set(target[0], target[1], target[2]);
+              }
+            } catch {
+              /* viewer torn down mid-frame */
+            }
+          };
+          driveRef.current.raf = requestAnimationFrame(step);
+        }
       } catch (exc) {
         if (!cancelled) setError(String(exc).slice(0, 400));
       }
@@ -75,6 +115,7 @@ export default function RealityViewer({ sceneId }: Props) {
 
     return () => {
       cancelled = true;
+      if (driveRef.current.raf) cancelAnimationFrame(driveRef.current.raf);
       try {
         viewer?.dispose?.();
       } catch {
@@ -96,6 +137,23 @@ export default function RealityViewer({ sceneId }: Props) {
               211,772 Gaussians · {cameraCount || 44} reconstructed camera poses
             </p>
           </div>
+        </div>
+      )}
+
+      {ready && cameraCount > 0 && (
+        <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-3 rounded-xl border border-white/10 bg-black/80 px-3 py-2 backdrop-blur">
+          <button
+            onClick={() => {
+              driveRef.current.driving = !driveRef.current.driving;
+              setDriving(driveRef.current.driving);
+            }}
+            className="rounded-md border border-white/15 px-3 py-1 text-xs text-white/80 hover:bg-white/5"
+          >
+            {driving ? "❚❚ Pause drive" : "▶ Drive corridor"}
+          </button>
+          <span className="text-[11px] text-white/45">
+            Camera rides the {cameraCount} reconstructed poses
+          </span>
         </div>
       )}
 
