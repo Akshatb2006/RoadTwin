@@ -25,6 +25,10 @@ type Props = {
   highlightSegments?: string[];
   /** Signals an intervention re-times. */
   highlightSignals?: Array<{ lat: number; lon: number }>;
+  /** Building footprints with heights -- the physical layer. */
+  buildings?: GeoJSON.FeatureCollection | null;
+  /** Tilt the camera and extrude buildings. */
+  threeD?: boolean;
 };
 
 const EMPTY: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
@@ -54,6 +58,8 @@ export default function MapView({
   showBasemap,
   highlightSegments = [],
   highlightSignals = [],
+  buildings = null,
+  threeD = false,
 }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
@@ -101,6 +107,27 @@ maxPitch: 60,
       instance.addSource("vehicles", { type: "geojson", data: EMPTY });
       instance.addSource("bottlenecks", { type: "geojson", data: EMPTY });
       instance.addSource("highlight-signals", { type: "geojson", data: EMPTY });
+      instance.addSource("buildings", { type: "geojson", data: EMPTY });
+
+      // Physical layer. Measured and estimated heights are coloured
+      // differently: a 3D city that presented inferred heights as survey data
+      // would undermine the honesty the rest of the tool depends on.
+      instance.addLayer({
+        id: "buildings",
+        type: "fill-extrusion",
+        source: "buildings",
+        paint: {
+          "fill-extrusion-color": [
+            "case",
+            ["get", "measured"], "#3d6ea8",
+            ["interpolate", ["linear"], ["coalesce", ["get", "height"], 10],
+              3, "#161d2b", 15, "#1e2839", 40, "#2b3950"],
+          ],
+          "fill-extrusion-height": ["coalesce", ["get", "height"], 8],
+          "fill-extrusion-base": 0,
+          "fill-extrusion-opacity": 0.92,
+        },
+      });
 
       // Wide soft casing underneath gives the network depth on a dark canvas.
       instance.addLayer({
@@ -347,6 +374,22 @@ maxPitch: 60,
         })),
     });
   }, [bottlenecks, ready]);
+
+  // ------------------------------------------------------------- buildings
+  useEffect(() => {
+    const instance = map.current;
+    if (!instance || !ready) return;
+    (instance.getSource("buildings") as maplibregl.GeoJSONSource | undefined)?.setData(
+      buildings ?? EMPTY,
+    );
+  }, [buildings, ready]);
+
+  useEffect(() => {
+    const instance = map.current;
+    if (!instance || !ready) return;
+    instance.setLayoutProperty("buildings", "visibility", threeD ? "visible" : "none");
+    instance.easeTo({ pitch: threeD ? 55 : 0, duration: 900 });
+  }, [threeD, ready]);
 
   // ------------------------------------------------------------- highlight
   useEffect(() => {

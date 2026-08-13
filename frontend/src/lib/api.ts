@@ -221,6 +221,11 @@ export const api = {
       junctions: GeoJSON.FeatureCollection;
     }>(`/api/networks/${networkId}/geometry`),
 
+  buildings: (networkId: string) =>
+    request<GeoJSON.FeatureCollection & { properties: Record<string, unknown> }>(
+      `/api/networks/${networkId}/buildings`,
+    ),
+
   parseScenario: (networkId: string, prompt: string) =>
     request<{ scenario: Scenario; explanation: string[] }>("/api/scenario/parse", {
       method: "POST",

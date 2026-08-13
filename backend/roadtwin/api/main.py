@@ -28,6 +28,7 @@ from ..contracts import (
 )
 from ..enrich.indian import enrich_network, network_summary
 from ..osm.build import build_network
+from ..osm.buildings import fetch_buildings
 from ..sim.analysis import compare_metrics, recommend_intervention
 from . import store
 
@@ -214,6 +215,18 @@ def get_network_geometry(network_id: str) -> JSONResponse:
             "junctions": {"type": "FeatureCollection", "features": junction_features},
         }
     )
+
+
+@app.get("/api/networks/{network_id}/buildings")
+def get_buildings(network_id: str) -> JSONResponse:
+    """Building footprints with heights -- the physical layer of the twin."""
+    network = store.load_network(network_id)
+    if not network:
+        raise HTTPException(404, "Network not found")
+    try:
+        return JSONResponse(fetch_buildings(network.bbox))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"Building fetch failed: {exc}") from exc
 
 
 @app.post("/api/scenario/parse")

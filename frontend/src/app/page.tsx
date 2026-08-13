@@ -76,6 +76,9 @@ export default function Page() {
   const [frameIndex, setFrameIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [showBasemap, setShowBasemap] = useState(false);
+  const [threeD, setThreeD] = useState(false);
+  const [buildings, setBuildings] = useState<GeoJSON.FeatureCollection | null>(null);
+  const [buildingInfo, setBuildingInfo] = useState<Record<string, unknown> | null>(null);
 
   useEffect(() => {
     api.presets().then(setPresets).catch(() => setError("Backend unreachable."));
@@ -100,6 +103,14 @@ export default function Page() {
       setNetwork(built);
       const geo = await api.geometry(built.id);
       setGeometry(geo);
+      // Physical layer loads in the background; the twin is usable without it.
+      api
+        .buildings(built.id)
+        .then((fc) => {
+          setBuildings(fc);
+          setBuildingInfo((fc.properties ?? null) as Record<string, unknown> | null);
+        })
+        .catch(() => setBuildings(null));
       setBuildMs(performance.now() - started);
     } catch (exc) {
       setError(String(exc));
@@ -279,6 +290,21 @@ export default function Page() {
           <label className="flex cursor-pointer items-center gap-1.5">
             <input
               type="checkbox"
+              checked={threeD}
+              onChange={(event) => setThreeD(event.target.checked)}
+              disabled={!buildings}
+              className="accent-sky-400"
+            />
+            3D city
+            {buildingInfo ? (
+              <span className="text-white/30">
+                ({(buildingInfo.count as number)?.toLocaleString()})
+              </span>
+            ) : null}
+          </label>
+          <label className="flex cursor-pointer items-center gap-1.5">
+            <input
+              type="checkbox"
               checked={showBasemap}
               onChange={(event) => setShowBasemap(event.target.checked)}
               className="accent-sky-400"
@@ -390,6 +416,8 @@ export default function Page() {
             showBasemap={showBasemap}
             highlightSegments={highlightSegments}
             highlightSignals={highlightSignals}
+            buildings={buildings}
+            threeD={threeD}
           />
 
           {!network && !building && (
