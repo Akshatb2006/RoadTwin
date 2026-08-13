@@ -8,7 +8,7 @@ import uuid
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from ..ai.planner import parse_scenario
@@ -416,6 +416,65 @@ def compare(request: CompareRequest) -> dict:
         deltas_pct=deltas_pct,
         verdict=verdict,
     ).model_dump()
+
+
+@app.get("/api/reality/scenes")
+def reality_scenes() -> list[dict]:
+    """Trained Gaussian splat scenes available for the reality view."""
+    from ..config import DATA_DIR
+
+    scenes = []
+    for ply in sorted((DATA_DIR / "reality").glob("*/*.ply")):
+        scenes.append({
+            "id": ply.parent.name,
+            "file": ply.name,
+            "size_mb": round(ply.stat().st_size / 1e6, 1),
+            "url": f"/api/reality/{ply.parent.name}/splat",
+        })
+    return scenes
+
+
+@app.get("/api/reality/{scene_id}/splat")
+def reality_splat(scene_id: str) -> FileResponse:
+    """Serve the trained .ply. Large, so it is streamed rather than inlined."""
+    from ..config import DATA_DIR
+
+    # Resolve inside the reality dir and refuse anything that escapes it.
+    base = (DATA_DIR / "reality").resolve()
+    target = (base / scene_id).resolve()
+    if not str(target).startswith(str(base)):
+        raise HTTPException(400, "Invalid scene id")
+    plys = sorted(target.glob("*.ply"))
+    if not plys:
+        raise HTTPException(404, "No trained splat for this scene")
+    return FileResponse(
+        plys[0],
+        media_type="application/octet-stream",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@app.get("/api/reality/{scene_id}/cameras")
+def reality_cameras(scene_id: str) -> JSONResponse:
+    """Harvested GPS poses for the scene -- the correspondences Gate 4 needs."""
+    from ..config import DATA_DIR
+
+    base = (DATA_DIR / "reality").resolve()
+    target = (base / scene_id).resolve()
+    if not str(target).startswith(str(base)):
+        raise HTTPException(400, "Invalid scene id")
+    # Prefer the recovered COLMAP poses: they are in the same frame as the
+    # splat, so the viewer can start at a real reconstructed viewpoint instead
+    # of an arbitrary origin (which lands the camera inside the point cloud).
+    cameras = target / "cameras.json"
+    if cameras.exists():
+        return JSONResponse(json.loads(cameras.read_text(encoding="utf-8")))
+    poses = target / "poses.json"
+    if not poses.exists():
+        poses = base / "seq2016_dense" / "poses.json"
+    if not poses.exists():
+        raise HTTPException(404, "No poses for this scene")
+    return JSONResponse(json.loads(poses.read_text(encoding="utf-8")))
 
 
 @app.get("/api/strategies")
