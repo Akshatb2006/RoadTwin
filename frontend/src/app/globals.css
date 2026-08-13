@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+:root {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+  background: #05070c;
+  font-family: var(--font-sans);
+}
+
+/* Tabular figures everywhere numbers change in place, so metrics do not jitter
+   as a simulation updates. */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #ffffff1a;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #ffffff2e;
+}
+
+input[type="range"] {
+  height: 4px;
+  border-radius: 999px;
+  background: #ffffff1f;
+  appearance: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #38bdf8;
+  cursor: pointer;
+  border: 2px solid #05070c;
+}
+
+/* MapLibre chrome, toned down to match the dark UI. */
+.maplibregl-ctrl-group {
+  background: #0b0f18 !important;
+  border: 1px solid #ffffff1a !important;
+}
+.maplibregl-ctrl-group button + button {
+  border-top: 1px solid #ffffff1a !important;
+}
+.maplibregl-ctrl-group button .maplibregl-ctrl-icon {
+  filter: invert(1) opacity(0.7);
+}

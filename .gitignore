@@ -1,0 +1,29 @@
+# ---- Python ----
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ---- Node / Next.js ----
+node_modules/
+.next/
+out/
+next-env.d.ts
+.turbo/
+*.tsbuildinfo
+
+# ---- Generated data ----
+# Networks, OSM extracts, routes, playback and per-run working directories are
+# all regenerated on demand and are far too large for version control.
+data/cache/
+data/runs/
+
+# ---- Environment / editor ----
+.env
+.env.local
+.env*.local
+.DS_Store
+.vscode/
+.idea/
+*.log
