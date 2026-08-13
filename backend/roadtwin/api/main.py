@@ -434,6 +434,54 @@ def reality_scenes() -> list[dict]:
     return scenes
 
 
+@app.get("/api/reality/{scene_id}/frames")
+def reality_frames(scene_id: str) -> JSONResponse:
+    """Ordered list of real street photographs for the corridor.
+
+    The Gaussian reconstruction is a research artifact; these are the actual
+    Mapillary photographs it was built from. For showing someone what the
+    diagnosed bottleneck really looks like, the photographs are simply better --
+    and they are honest in a way a weakly-constrained splat is not.
+    """
+    from ..config import DATA_DIR
+
+    base = (DATA_DIR / "reality").resolve()
+    target = (base / scene_id).resolve()
+    if not str(target).startswith(str(base)):
+        raise HTTPException(400, "Invalid scene id")
+    poses_path = target / "poses.json"
+    if not poses_path.exists():
+        raise HTTPException(404, "No frames for this scene")
+
+    poses = json.loads(poses_path.read_text(encoding="utf-8"))
+    images = target / "images"
+    frames = [
+        {
+            "file": p["file"],
+            "url": f"/api/reality/{scene_id}/frame/{p['file']}",
+            "lat": p.get("lat"),
+            "lon": p.get("lon"),
+            "compass": p.get("compass"),
+        }
+        for p in poses
+        if (images / p["file"]).exists()
+    ]
+    return JSONResponse({"count": len(frames), "frames": frames})
+
+
+@app.get("/api/reality/{scene_id}/frame/{filename}")
+def reality_frame(scene_id: str, filename: str) -> FileResponse:
+    """Serve one street photograph."""
+    from ..config import DATA_DIR
+
+    base = (DATA_DIR / "reality").resolve()
+    path = (base / scene_id / "images" / filename).resolve()
+    if not str(path).startswith(str(base)) or not path.exists():
+        raise HTTPException(404, "Frame not found")
+    return FileResponse(path, media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.get("/api/reality/{scene_id}/splat")
 def reality_splat(scene_id: str) -> FileResponse:
     """Serve the trained .ply. Large, so it is streamed rather than inlined."""
