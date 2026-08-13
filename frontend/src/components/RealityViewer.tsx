@@ -55,6 +55,11 @@ export default function RealityViewer({ sceneId }: Props) {
           initialCameraLookAt: lookAt,
           // Avoids requiring COOP/COEP cross-origin isolation headers, which
           // Next's dev server does not send.
+          // A narrower field of view keeps the frame on the well-constrained
+          // centre of the corridor and pushes the poorly-reconstructed
+          // periphery out of shot. It also reads as a longer lens, which suits
+          // a street scene.
+          camera: undefined,
           sharedMemoryForWorkers: false,
           dynamicScene: false,
           selfDrivenMode: true,
@@ -87,7 +92,9 @@ export default function RealityViewer({ sceneId }: Props) {
             driveRef.current.raf = requestAnimationFrame(step);
             if (!driveRef.current.driving) return;
             // ~9 s for the full corridor, looping.
-            driveRef.current.t = (driveRef.current.t + 0.0022) % 1;
+            // Slower than the first pass: the reconstruction reads better when
+            // the viewer is not rushed past it.
+            driveRef.current.t = (driveRef.current.t + 0.0013) % 1;
             const f = driveRef.current.t * (poses.length - 1);
             const i = Math.floor(f);
             const frac = f - i;
@@ -97,6 +104,10 @@ export default function RealityViewer({ sceneId }: Props) {
             const fwd = lerp(a.fwd, b.fwd, frac);
             const target = C.map((v, k) => v + fwd[k] * 6);
             try {
+              if (viewer.camera.fov !== 42) {
+                viewer.camera.fov = 42;
+                viewer.camera.updateProjectionMatrix();
+              }
               viewer.camera.position.set(C[0], C[1], C[2]);
               viewer.camera.lookAt(target[0], target[1], target[2]);
               if (viewer.controls) {

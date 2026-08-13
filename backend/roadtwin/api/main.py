@@ -444,7 +444,9 @@ def reality_splat(scene_id: str) -> FileResponse:
     target = (base / scene_id).resolve()
     if not str(target).startswith(str(base)):
         raise HTTPException(400, "Invalid scene id")
-    plys = sorted(target.glob("*.ply"))
+    # Prefer the pruned scene: the raw training output carries ~20% oversized,
+    # transparent and far-outlier Gaussians that render as white smears and haze.
+    plys = sorted(target.glob("*_clean.ply")) or sorted(target.glob("*.ply"))
     if not plys:
         raise HTTPException(404, "No trained splat for this scene")
     return FileResponse(
