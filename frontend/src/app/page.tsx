@@ -35,6 +35,7 @@ import {
 import { Button, Panel, Select, Slider, Spinner, Stat } from "@/components/ui";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
+const SimpleMode = dynamic(() => import("@/components/SimpleMode"), { ssr: false });
 
 type Geometry = {
   roads: GeoJSON.FeatureCollection;
@@ -42,6 +43,9 @@ type Geometry = {
 };
 
 export default function Page() {
+  // Simple by default. The full dashboard is the right depth for an engineer
+  // and the wrong first impression for the official making the decision.
+  const [advanced, setAdvanced] = useState(false);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [presetKey, setPresetKey] = useState("koramangala");
   const [network, setNetwork] = useState<NetworkSummary | null>(null);
@@ -307,6 +311,8 @@ export default function Page() {
   );
   const control = experiment?.results.find((r) => r.is_control) ?? null;
 
+  if (!advanced) return <SimpleMode onAdvanced={() => setAdvanced(true)} />;
+
   return (
     <main className="flex h-screen w-screen flex-col overflow-hidden bg-[#05070c] text-white">
       {/* ------------------------------------------------------------ header */}
@@ -325,6 +331,12 @@ export default function Page() {
               {workers} simulation workers · SUMO 1.27
             </span>
           )}
+          <button
+            onClick={() => setAdvanced(false)}
+            className="rounded-md border border-white/15 px-2.5 py-1 text-[11px] text-white/70 hover:bg-white/5"
+          >
+            ← Simple view
+          </button>
           {network && (
             <Link
               href="/reality"
