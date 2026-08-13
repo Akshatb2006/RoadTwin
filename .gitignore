@@ -18,6 +18,9 @@ next-env.d.ts
 # all regenerated on demand and are far too large for version control.
 data/cache/
 data/runs/
+# Downloaded imagery, COLMAP databases and trained splats: hundreds of MB,
+# all regenerable from the Mapillary sequence id.
+data/reality/
 
 # ---- Environment / editor ----
 .env

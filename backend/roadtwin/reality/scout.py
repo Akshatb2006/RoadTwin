@@ -20,6 +20,7 @@ Pass it as MAPILLARY_TOKEN in the environment.
 
 from __future__ import annotations
 
+import datetime
 import math
 import os
 import statistics
@@ -101,7 +102,13 @@ def analyse(images: list[dict]) -> CorridorReport:
         by_sequence.setdefault(image.get("sequence", "?"), []).append(image)
         captured = image.get("captured_at")
         if captured:
-            dates.add(str(captured)[:10])
+            # captured_at is epoch MILLISECONDS; slicing the digits counts
+            # timestamps, not days, and reports thousands of "dates".
+            dates.add(
+                datetime.datetime.fromtimestamp(
+                    int(captured) / 1000, datetime.UTC
+                ).strftime("%Y-%m-%d")
+            )
         if image.get("is_pano"):
             report.is_pano += 1
 
@@ -130,9 +137,12 @@ def analyse(images: list[dict]) -> CorridorReport:
                 run_frames += 1
             else:
                 run_length, run_frames = 0.0, 1
-            if run_length > report.longest_run_m:
-                report.longest_run_m = run_length
+            # Track the best run by FRAME COUNT, not by distance. Ranking by
+            # distance picks a long sparse drive over a shorter dense one, and
+            # frames -- not metres -- are what a reconstruction actually needs.
+            if run_frames > report.longest_run_frames:
                 report.longest_run_frames = run_frames
+                report.longest_run_m = run_length
                 report.best_sequence = sequence_id
 
     if all_spacings:
