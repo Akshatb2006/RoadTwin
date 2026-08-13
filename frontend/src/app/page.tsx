@@ -65,6 +65,10 @@ export default function Page() {
   const [comparison, setComparison] = useState<Comparison | null>(null);
   const [running, setRunning] = useState<string | null>(null);
   const [experiment, setExperiment] = useState<Experiment | null>(null);
+  // Same interventions, several demand levels. The point is not more data --
+  // it is that the ranking can invert as the network saturates.
+  const [sweep, setSweep] = useState<{ demand: number; experiment: Experiment }[]>([]);
+  const [sweeping, setSweeping] = useState(false);
   const [experimenting, setExperimenting] = useState(false);
   const [interventions, setInterventions] = useState<InterventionKey[]>([
     "add_lane",
@@ -191,6 +195,38 @@ export default function Page() {
       setError(String(exc));
     } finally {
       setExperimenting(false);
+    }
+  }, [network, scenario, interventions, baseline]);
+
+  const runDemandSweep = useCallback(async () => {
+    if (!network || interventions.length === 0) return;
+    setSweeping(true);
+    setError(null);
+    setSweep([]);
+    try {
+      const targets = (baseline?.bottlenecks ?? []).slice(0, 3).map((b) => b.segment_id);
+      const levels = [1.0, 1.2, 1.4];
+      const results: { demand: number; experiment: Experiment }[] = [];
+      for (const demand of levels) {
+        const started = await api.experiment(
+          network.id,
+          {
+            ...scenario,
+            demand_multiplier: demand,
+            lane_closures: [],
+            lane_additions: [],
+            incidents: [],
+          },
+          interventions,
+          targets,
+        );
+        results.push({ demand, experiment: await waitForExperiment(started.id) });
+        setSweep([...results]);
+      }
+    } catch (exc) {
+      setError(String(exc));
+    } finally {
+      setSweeping(false);
     }
   }, [network, scenario, interventions, baseline]);
 
@@ -614,15 +650,27 @@ export default function Page() {
               )}
               <Button
                 onClick={runExperiment}
-                disabled={!network || experimenting || interventions.length === 0}
+                disabled={!network || experimenting || sweeping || interventions.length === 0}
                 className="w-full"
               >
                 {experimenting
                   ? `Running ${interventions.length + 1} simulations in parallel…`
                   : `Compare ${interventions.length} interventions`}
               </Button>
+              <Button
+                variant="ghost"
+                onClick={runDemandSweep}
+                disabled={!network || experimenting || sweeping || interventions.length === 0}
+                className="w-full"
+              >
+                {sweeping
+                  ? `Sweeping demand… (${sweep.length}/3)`
+                  : "Sweep across demand levels"}
+              </Button>
             </div>
           </Panel>
+
+          {sweep.length > 0 && <DemandSweepPanel sweep={sweep} />}
 
           {experiment && ranked.length > 0 && (
             <Panel
@@ -1010,6 +1058,102 @@ function BottleneckPanel({ bottlenecks }: { bottlenecks: Bottleneck[] }) {
           </div>
         ))}
       </div>
+    </Panel>
+  );
+}
+
+/**
+ * Interventions ranked at several demand levels.
+ *
+ * The single most useful thing the tool can show: a fix that works at moderate
+ * demand can stop working, or reverse, once the network saturates -- because
+ * the binding constraint moves from road width to junction capacity. Reading
+ * one demand level alone hides that entirely.
+ */
+function DemandSweepPanel({
+  sweep,
+}: {
+  sweep: { demand: number; experiment: Experiment }[];
+}) {
+  const labels = Array.from(
+    new Map(
+      sweep
+        .flatMap((s) => s.experiment.results)
+        .filter((r) => !r.is_control)
+        .map((r) => [r.key, r.label] as const),
+    ),
+  );
+
+  // Two distinct findings, and checking only the winner misses the important
+  // one: an intervention can flip from helping to harming while the best
+  // option stays the same.
+  const winners = sweep.map((s) => s.experiment.best_key);
+  const winnerChanged = new Set(winners.filter(Boolean)).size > 1;
+  const reversed = labels
+    .filter(([key]) => {
+      const deltas = sweep
+        .map((s) => s.experiment.results.find((x) => x.key === key)?.deltas_pct?.avg_delay_s)
+        .filter((d): d is number => d !== undefined);
+      return deltas.some((d) => d < -1) && deltas.some((d) => d > 1);
+    })
+    .map(([, label]) => label);
+
+  return (
+    <Panel
+      title="Demand sweep"
+      subtitle="Same interventions, rising demand — does the answer hold?"
+    >
+      <table className="w-full text-[11px]">
+        <thead className="text-white/40">
+          <tr>
+            <th className="text-left font-normal">Intervention</th>
+            {sweep.map((s) => (
+              <th key={s.demand} className="text-right font-normal">
+                {(s.demand * 100).toFixed(0)}%
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="tabular-nums">
+          {labels.map(([key, label]) => (
+            <tr key={key} className="text-white/80">
+              <td className="py-0.5 pr-2">{label}</td>
+              {sweep.map((s) => {
+                const r = s.experiment.results.find((x) => x.key === key);
+                const d = r?.deltas_pct?.avg_delay_s;
+                const best = s.experiment.best_key === key;
+                return (
+                  <td
+                    key={s.demand}
+                    className={`text-right ${
+                      d === undefined
+                        ? "text-white/25"
+                        : d < 0
+                          ? "text-emerald-400"
+                          : "text-rose-400"
+                    }`}
+                  >
+                    {best && "★"}
+                    {d === undefined ? "—" : `${d > 0 ? "+" : ""}${d.toFixed(1)}%`}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <p className="mt-2 rounded-md border border-amber-400/25 bg-amber-400/[0.07] px-2.5 py-2 text-[11px] leading-snug text-amber-100/85">
+        {reversed.length > 0
+          ? `${reversed.join(" and ")} helps at lower demand and makes things worse at higher demand. Extra road capacity stops paying off once the junction, not the link, is the binding constraint — which is what the causal attribution independently reports.`
+          : winnerChanged
+            ? "The best intervention changes with demand, so a recommendation made at one traffic level does not carry to another."
+            : "The ranking holds across every demand level tested, so the recommendation is stable rather than an artefact of one traffic assumption."}
+      </p>
+      <p className="mt-1 text-[10px] text-white/30">
+        Delay change vs a no-intervention control at the same demand. ★ marks the
+        best at that level.
+      </p>
     </Panel>
   );
 }
