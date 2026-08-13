@@ -203,6 +203,19 @@ class LaneClosure(BaseModel):
     end_s: float = 1e9
 
 
+class LaneAddition(BaseModel):
+    """Widen a segment by N lanes -- the symmetric, *positive* intervention.
+
+    Unlike a closure this cannot be applied over TraCI: lane count is baked into
+    the network at build time. We therefore regenerate a patched network with
+    netconvert, so junction connections, turn lanes and right-of-way are all
+    recomputed properly rather than faked by inflating a speed limit.
+    """
+
+    segment_id: str
+    lanes_added: int = 1
+
+
 class Incident(BaseModel):
     """A stopped vehicle / breakdown at a point along a segment."""
 
@@ -237,6 +250,7 @@ class Scenario(BaseModel):
     vehicle_mix: dict[str, float] = Field(default_factory=lambda: dict(DEFAULT_VEHICLE_MIX))
 
     lane_closures: list[LaneClosure] = Field(default_factory=list)
+    lane_additions: list[LaneAddition] = Field(default_factory=list)
     incidents: list[Incident] = Field(default_factory=list)
     obstructions: list[Obstruction] = Field(default_factory=list)
 
@@ -269,6 +283,15 @@ class Metrics(BaseModel):
     vehicles_loaded: int = 0
     vehicles_arrived: int = 0
     vehicles_still_running: int = 0
+    completion_rate: float = 0.0
+    """Fraction of loaded vehicles that finished their trip (arrived / loaded).
+
+    This, not throughput, is the honest degradation metric. Throughput counts
+    trips completed per hour, so raising demand raises throughput even as the
+    network gets worse -- it moves in the wrong direction under exactly the
+    scenarios we care about. Completion rate only has meaning when demand is
+    held constant, which is why experiments compare at identical demand.
+    """
     congestion_index: float = 0.0   # 0..1, 1 = gridlock
     total_co2_kg: float = 0.0
     total_fuel_l: float = 0.0
@@ -354,6 +377,9 @@ class SimulationRun(BaseModel):
     segment_metrics: list[SegmentMetric] = Field(default_factory=list)
     bottlenecks: list[Bottleneck] = Field(default_factory=list)
     playback: list[PlaybackFrame] = Field(default_factory=list)
+    # {segment_id: [lanes_before, lanes_after]} when a widening was applied
+    widened_segments: dict[str, list[int]] = Field(default_factory=dict)
+    explanation: str = ""
 
     wall_seconds: float = 0.0
     sim_seconds: float = 0.0
@@ -370,3 +396,38 @@ class Comparison(BaseModel):
     deltas: dict[str, float] = Field(default_factory=dict)      # absolute
     deltas_pct: dict[str, float] = Field(default_factory=dict)  # percent
     verdict: str = ""
+
+
+# --------------------------------------------------------------------------
+# 4. CONTROLLED EXPERIMENT
+# --------------------------------------------------------------------------
+
+
+class InterventionResult(BaseModel):
+    key: str
+    label: str
+    run_id: str
+    metrics: Metrics = Field(default_factory=Metrics)
+    deltas_pct: dict[str, float] = Field(default_factory=dict)
+    is_control: bool = False
+    failed: bool = False
+
+
+class Experiment(BaseModel):
+    """A controlled comparison: identical demand, one variable changed.
+
+    The control and every intervention share demand, weather, fleet mix and
+    random seed. Only the intervention differs, so a difference in outcome is
+    attributable to the intervention rather than to the traffic level -- which
+    is the claim a transport engineer actually needs to make.
+    """
+
+    id: str
+    network_id: str
+    demand_multiplier: float
+    duration_s: int
+    control_run_id: str = ""
+    results: list[InterventionResult] = Field(default_factory=list)
+    diagnosis: str = ""
+    recommendation: str = ""
+    best_key: Optional[str] = None

@@ -65,6 +65,39 @@ IRC-style `capacity_pcu_hr` per segment. Across Koramangala this reclassifies
 `--lefthand` is passed to `netconvert`: India drives on the left, and without
 it every junction's turn geometry and right-of-way is silently mirrored.
 
+## The methodological core: controlled experiments
+
+Comparing "today" against "peak demand + a lane closure" changes two things at
+once, so the result cannot be attributed to either. RoadTwin instead runs a
+**control and every intervention at identical demand, fleet mix and seed**, in
+parallel, changing only the intervention. That is what makes the output a
+claim a transport engineer can defend: *under identical demand, this changes
+delay by X%*.
+
+Interventions are aimed at the bottlenecks the baseline actually measured, not
+at whichever road is structurally largest — widening a road that is not the
+constraint is precisely the mistake this tool exists to prevent.
+
+Measured on Koramangala, 10-minute horizon, all runs at the same demand:
+
+| Intervention | +20% demand | +40% demand |
+|---|---|---|
+| No intervention (control) | 99 s delay | 92 s delay |
+| Add one lane at the bottleneck | −5.1% | **+2.1%** |
+| Adaptive signals | −9.8% | −3.4% |
+| Max-pressure signals | **−16.5%** | **−5.5%** |
+
+The +40% column is the more interesting result: **widening stops working once
+the network saturates**, because the binding constraint is green time at the
+junction, not width on the link — which is exactly what the causal attribution
+independently reports (signal delay ≈29% of the modelled cause). The tool
+disagrees with the intuitive fix, and shows its reasoning.
+
+`completion_rate` (arrived / loaded), not throughput, is the headline
+degradation metric. Throughput counts trips finished per hour, so raising
+demand raises throughput even as the network gets worse — it moves the wrong
+way under exactly the scenarios that matter.
+
 ## Honest engineering notes
 
 - **The LLM never runs the simulation.** Natural language is parsed into a

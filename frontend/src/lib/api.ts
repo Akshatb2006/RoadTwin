@@ -56,6 +56,7 @@ export interface Metrics {
   vehicles_loaded: number;
   vehicles_arrived: number;
   vehicles_still_running: number;
+  completion_rate: number;
   congestion_index: number;
   total_co2_kg: number;
   total_fuel_l: number;
@@ -113,6 +114,7 @@ export interface Scenario {
     start_s: number;
     end_s: number;
   }>;
+  lane_additions: Array<{ segment_id: string; lanes_added: number }>;
   incidents: Array<{ segment_id: string; position: number; duration_s: number }>;
   obstructions: Array<{ segment_id: string; kind: string; severity: number }>;
   signal_strategy: SignalStrategy;
@@ -136,6 +138,37 @@ export interface SimulationRun {
   wall_seconds: number;
   sim_seconds: number;
   realtime_factor: number;
+  widened_segments: Record<string, number[]>;
+  explanation: string;
+}
+
+export type InterventionKey =
+  | "add_lane"
+  | "close_lane"
+  | "adaptive"
+  | "max_pressure";
+
+export interface InterventionResult {
+  key: string;
+  label: string;
+  run_id: string;
+  metrics: Metrics;
+  deltas_pct: Record<string, number>;
+  is_control: boolean;
+  failed: boolean;
+}
+
+export interface Experiment {
+  id: string;
+  network_id: string;
+  demand_multiplier: number;
+  duration_s: number;
+  control_run_id: string;
+  results: InterventionResult[];
+  diagnosis: string;
+  recommendation: string;
+  best_key: string | null;
+  finished?: boolean;
 }
 
 export interface Comparison {
@@ -211,6 +244,24 @@ export const api = {
   playback: (runId: string) =>
     request<{ frames: PlaybackFrame[] }>(`/api/runs/${runId}/playback`),
 
+  experiment: (
+    networkId: string,
+    baseScenario: Scenario,
+    interventions: InterventionKey[],
+    targetSegments: string[] = [],
+  ) =>
+    request<Experiment>("/api/experiment", {
+      method: "POST",
+      body: JSON.stringify({
+        network_id: networkId,
+        base_scenario: baseScenario,
+        interventions,
+        target_segments: targetSegments,
+      }),
+    }),
+
+  getExperiment: (id: string) => request<Experiment>(`/api/experiment/${id}`),
+
   compare: (baselineRunId: string, scenarioRunId: string) =>
     request<Comparison>("/api/compare", {
       method: "POST",
@@ -220,6 +271,20 @@ export const api = {
       }),
     }),
 };
+
+/** Poll an experiment until every run in it has settled. */
+export async function waitForExperiment(
+  id: string,
+  onTick?: (experiment: Experiment) => void,
+  intervalMs = 2000,
+): Promise<Experiment> {
+  for (;;) {
+    const experiment = await api.getExperiment(id);
+    onTick?.(experiment);
+    if (experiment.finished) return experiment;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
 
 /** Poll a run until it reaches a terminal state. */
 export async function waitForRun(
@@ -253,6 +318,7 @@ export function newScenario(partial: Partial<Scenario> = {}): Scenario {
     demand_multiplier: 1,
     vehicle_mix: { ...DEFAULT_VEHICLE_MIX },
     lane_closures: [],
+    lane_additions: [],
     incidents: [],
     obstructions: [],
     signal_strategy: "fixed",

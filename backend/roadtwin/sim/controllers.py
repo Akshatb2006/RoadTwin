@@ -32,12 +32,19 @@ class SignalController:
 class MaxPressureController(SignalController):
     """Decentralised max-pressure control with a minimum-green constraint."""
 
-    MIN_GREEN_S = 10.0
+    MIN_GREEN_S = 12.0
     DECISION_INTERVAL_S = 5.0
+    AMBER_S = 4.0
+    # Pressure must beat the incumbent by this margin to justify a switch.
+    # Without hysteresis the controller thrashes between near-equal phases once
+    # every approach is saturated, and each switch costs a clearance interval.
+    SWITCH_MARGIN = 4.0
 
     def __init__(self, traci_conn, tls_ids: list[str]):
         super().__init__(traci_conn, tls_ids)
         self._last_switch: dict[str, float] = {t: 0.0 for t in tls_ids}
+        # tls_id -> (target_phase, time_at_which_amber_ends)
+        self._pending: dict[str, tuple[int, float]] = {}
         self._last_decision = -1e9
         # Cache the static structure once: phases and their controlled links.
         self._phases: dict[str, list] = {}
@@ -72,14 +79,33 @@ class MaxPressureController(SignalController):
             total += upstream - downstream
         return total
 
+    def _amber_after(self, tls_id: str, phase_index: int) -> int | None:
+        """The amber interval that clears `phase_index`, if the program has one."""
+        phases = self._phases.get(tls_id) or []
+        for offset in range(1, len(phases)):
+            candidate = (phase_index + offset) % len(phases)
+            if "y" in phases[candidate].state.lower():
+                return candidate
+        return None
+
     def step(self, t: float) -> None:
+        # Complete any amber clearance already in progress before deciding again.
+        for tls_id, (target, ready_at) in list(self._pending.items()):
+            if t >= ready_at:
+                try:
+                    self.traci.trafficlight.setPhase(tls_id, target)
+                    self._last_switch[tls_id] = t
+                except Exception:  # noqa: BLE001
+                    pass
+                self._pending.pop(tls_id, None)
+
         if t - self._last_decision < self.DECISION_INTERVAL_S:
             return
         self._last_decision = t
 
         for tls_id in self.tls_ids:
             phases = self._phases.get(tls_id)
-            if not phases:
+            if not phases or tls_id in self._pending:
                 continue
             if t - self._last_switch.get(tls_id, 0.0) < self.MIN_GREEN_S:
                 continue
@@ -93,16 +119,28 @@ class MaxPressureController(SignalController):
                 i for i, p in enumerate(phases)
                 if "y" not in p.state.lower() and ("G" in p.state or "g" in p.state)
             ]
-            if len(candidates) < 2:
+            if len(candidates) < 2 or current not in candidates:
                 continue
 
             best = max(candidates, key=lambda i: self._pressure(tls_id, i))
-            if best != current and self._pressure(tls_id, best) > self._pressure(tls_id, current) + 1.0:
-                try:
+            if best == current:
+                continue
+            if self._pressure(tls_id, best) <= self._pressure(tls_id, current) + self.SWITCH_MARGIN:
+                continue
+
+            # Never jump straight between conflicting greens: run the program's
+            # amber first. Skipping it removes the clearance interval, so the
+            # junction locks up and max-pressure ends up *worse* than fixed-time.
+            amber = self._amber_after(tls_id, current)
+            try:
+                if amber is None:
                     self.traci.trafficlight.setPhase(tls_id, best)
                     self._last_switch[tls_id] = t
-                except Exception:  # noqa: BLE001
-                    continue
+                else:
+                    self.traci.trafficlight.setPhase(tls_id, amber)
+                    self._pending[tls_id] = (best, t + self.AMBER_S)
+            except Exception:  # noqa: BLE001
+                continue
 
 
 class AdaptiveController(SignalController):

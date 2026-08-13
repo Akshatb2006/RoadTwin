@@ -17,9 +17,12 @@ import {
   CLASS_COLOURS,
   CLASS_LABELS,
   newScenario,
+  waitForExperiment,
   waitForRun,
   type Bottleneck,
   type Comparison,
+  type Experiment,
+  type InterventionKey,
   type NetworkSummary,
   type PlaybackFrame,
   type Preset,
@@ -60,8 +63,13 @@ export default function Page() {
   const [current, setCurrent] = useState<SimulationRun | null>(null);
   const [comparison, setComparison] = useState<Comparison | null>(null);
   const [running, setRunning] = useState<string | null>(null);
-  const [sweeping, setSweeping] = useState(false);
-  const [sweepRuns, setSweepRuns] = useState<SimulationRun[]>([]);
+  const [experiment, setExperiment] = useState<Experiment | null>(null);
+  const [experimenting, setExperimenting] = useState(false);
+  const [interventions, setInterventions] = useState<InterventionKey[]>([
+    "add_lane",
+    "adaptive",
+    "max_pressure",
+  ]);
 
   const [frames, setFrames] = useState<PlaybackFrame[]>([]);
   const [frameIndex, setFrameIndex] = useState(0);
@@ -84,7 +92,7 @@ export default function Page() {
     setCurrent(null);
     setComparison(null);
     setFrames([]);
-    setSweepRuns([]);
+    setExperiment(null);
     const started = performance.now();
     try {
       const { network: built } = await api.buildNetwork(presetKey);
@@ -148,30 +156,35 @@ export default function Page() {
     [execute, scenario.duration_s],
   );
 
-  // --------------------------------------------------------- strategy sweep
-  const runStrategySweep = useCallback(async () => {
-    if (!network) return;
-    setSweeping(true);
+  // ------------------------------------------------------ intervention lab
+  const runExperiment = useCallback(async () => {
+    if (!network || interventions.length === 0) return;
+    setExperimenting(true);
     setError(null);
     try {
-      const strategies: SignalStrategy[] = ["fixed", "adaptive", "max_pressure"];
-      const scenarios = strategies.map((strategy) =>
-        newScenario({
-          ...scenario,
-          id: `sweep_${strategy}`,
-          name: strategy,
-          signal_strategy: strategy,
-        }),
+      // Interventions are aimed at the bottlenecks the baseline actually found,
+      // not at whichever road is structurally biggest. Widening a road that is
+      // not the constraint is exactly the mistake this tool exists to prevent.
+      const targets = (baseline?.bottlenecks ?? []).slice(0, 3).map((b) => b.segment_id);
+      const started = await api.experiment(
+        network.id,
+        { ...scenario, lane_closures: [], lane_additions: [], incidents: [] },
+        interventions,
+        targets,
       );
-      const { run_ids } = await api.sweep(network.id, scenarios);
-      const results = await Promise.all(run_ids.map((id) => waitForRun(id)));
-      setSweepRuns(results);
+      const finished = await waitForExperiment(started.id, setExperiment);
+      setExperiment(finished);
     } catch (exc) {
       setError(String(exc));
     } finally {
-      setSweeping(false);
+      setExperimenting(false);
     }
-  }, [network, scenario]);
+  }, [network, scenario, interventions, baseline]);
+
+  const toggleIntervention = (key: InterventionKey) =>
+    setInterventions((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+    );
 
   // ------------------------------------------------------------- NL parse
   const parsePrompt = useCallback(async () => {
@@ -527,22 +540,57 @@ export default function Page() {
                   {running === "scenario" ? "Running…" : "Run scenario"}
                 </Button>
               </div>
+            </div>
+          </Panel>
+
+          <Panel
+            title="6 · Intervention lab"
+            subtitle="Every option runs at the SAME demand, so the difference is the intervention"
+          >
+            <div className="space-y-1.5">
+              {([
+                ["add_lane", "Add one lane", "Widen the diagnosed bottleneck (network rebuilt)"],
+                ["adaptive", "Adaptive signals", "Queue-responsive green times"],
+                ["max_pressure", "Max-pressure signals", "Throughput-maximising control"],
+                ["close_lane", "Close one lane", "Negative control / roadworks"],
+              ] as [InterventionKey, string, string][]).map(([key, label, hint]) => (
+                <label
+                  key={key}
+                  className="flex cursor-pointer items-start gap-2 rounded-md border border-white/10 bg-white/[0.02] px-2 py-1.5"
+                >
+                  <input
+                    type="checkbox"
+                    checked={interventions.includes(key)}
+                    onChange={() => toggleIntervention(key)}
+                    className="mt-0.5 accent-sky-400"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-[11px] text-white/85">{label}</span>
+                    <span className="block text-[10px] leading-snug text-white/35">{hint}</span>
+                  </span>
+                </label>
+              ))}
+              {!baseline && (
+                <p className="text-[10px] leading-snug text-amber-300/70">
+                  Run the baseline first — interventions are aimed at the bottlenecks it
+                  finds, not at whichever road is largest.
+                </p>
+              )}
               <Button
-                variant="ghost"
-                onClick={runStrategySweep}
-                disabled={!network || sweeping}
+                onClick={runExperiment}
+                disabled={!network || experimenting || interventions.length === 0}
                 className="w-full"
               >
-                {sweeping
-                  ? `Running 3 scenarios in parallel…`
-                  : `Compare signal strategies (parallel)`}
+                {experimenting
+                  ? `Running ${interventions.length + 1} simulations in parallel…`
+                  : `Compare ${interventions.length} interventions`}
               </Button>
             </div>
           </Panel>
 
           {metrics && (
             <Panel
-              title="6 · Results"
+              title="7 · Results"
               subtitle={
                 current
                   ? `${current.sim_seconds.toFixed(0)}s simulated in ${current.wall_seconds.toFixed(1)}s (${current.realtime_factor.toFixed(0)}× realtime)`
@@ -571,10 +619,14 @@ export default function Page() {
                   invert
                 />
                 <Stat
-                  label="Throughput"
-                  value={metrics.throughput_veh_hr.toFixed(0)}
-                  unit="veh/h"
-                  delta={pct?.throughput_veh_hr}
+                  label="Trip completion"
+                  value={(metrics.completion_rate * 100).toFixed(1)}
+                  unit="%"
+                  delta={
+                    pct?.completion_rate === undefined
+                      ? undefined
+                      : pct.completion_rate
+                  }
                 />
                 <Stat
                   label="Max queue"
@@ -589,11 +641,26 @@ export default function Page() {
                   unit="%"
                 />
               </div>
+              {current?.explanation && (
+                <div className="mt-2 rounded-md border border-white/10 bg-white/[0.04] px-2.5 py-2">
+                  <div className="text-[10px] uppercase tracking-wider text-white/40">
+                    Why this happened
+                  </div>
+                  <p className="mt-0.5 text-[11px] leading-snug text-white/80">
+                    {current.explanation}
+                  </p>
+                </div>
+              )}
               {comparison && (
-                <p className="mt-2 rounded-md bg-white/[0.04] px-2.5 py-1.5 text-[11px] leading-snug text-white/70">
+                <p className="mt-1.5 rounded-md bg-white/[0.04] px-2.5 py-1.5 text-[11px] leading-snug text-white/70">
                   {comparison.verdict}
                 </p>
               )}
+              <p className="mt-1.5 text-[10px] text-white/30">
+                Throughput {metrics.throughput_veh_hr.toFixed(0)} veh/h ·{" "}
+                {metrics.vehicles_arrived}/{metrics.vehicles_loaded} trips completed ·
+                CO₂ {metrics.total_co2_kg.toFixed(1)} kg
+              </p>
               {metrics.teleports > 0 && (
                 <p className="mt-1.5 text-[10px] text-amber-300/70">
                   {metrics.teleports} vehicles teleported — SUMO&apos;s gridlock escape
@@ -603,42 +670,82 @@ export default function Page() {
             </Panel>
           )}
 
-          {sweepRuns.length > 0 && (
-            <Panel title="Signal strategy comparison" subtitle="Run concurrently across workers">
+          {experiment && experiment.results.length > 0 && (
+            <Panel
+              title="Controlled comparison"
+              subtitle={`All runs at ${(experiment.demand_multiplier * 100).toFixed(0)}% demand · ${Math.round(experiment.duration_s / 60)} min`}
+            >
               <table className="w-full text-[11px]">
                 <thead className="text-white/40">
                   <tr>
-                    <th className="text-left font-normal">Strategy</th>
-                    <th className="text-right font-normal">Speed</th>
+                    <th className="text-left font-normal">Intervention</th>
                     <th className="text-right font-normal">Delay</th>
-                    <th className="text-right font-normal">Served</th>
+                    <th className="text-right font-normal">Speed</th>
+                    <th className="text-right font-normal">vs control</th>
                   </tr>
                 </thead>
                 <tbody className="tabular-nums">
-                  {sweepRuns.map((run) => {
-                    const best =
-                      run.metrics.avg_delay_s ===
-                      Math.min(...sweepRuns.map((r) => r.metrics.avg_delay_s));
+                  {experiment.results.map((result) => {
+                    const delta = result.deltas_pct?.avg_delay_s;
+                    const best = experiment.best_key === result.key;
                     return (
                       <tr
-                        key={run.id}
-                        className={best ? "text-emerald-300" : "text-white/75"}
+                        key={result.key}
+                        className={
+                          best
+                            ? "text-emerald-300"
+                            : result.is_control
+                              ? "text-white/50"
+                              : "text-white/80"
+                        }
                       >
-                        <td className="py-0.5 capitalize">
-                          {run.scenario.signal_strategy.replace("_", "-")}
+                        <td className="py-0.5">
+                          {best && "★ "}
+                          {result.label}
                         </td>
                         <td className="text-right">
-                          {run.metrics.avg_speed_kmh.toFixed(1)}
+                          {result.failed ? "—" : `${result.metrics.avg_delay_s.toFixed(0)}s`}
                         </td>
                         <td className="text-right">
-                          {run.metrics.avg_delay_s.toFixed(0)}s
+                          {result.failed
+                            ? "—"
+                            : `${result.metrics.avg_speed_kmh.toFixed(1)}`}
                         </td>
-                        <td className="text-right">{run.metrics.vehicles_arrived}</td>
+                        <td
+                          className={`text-right ${
+                            delta === undefined
+                              ? "text-white/30"
+                              : delta < 0
+                                ? "text-emerald-400"
+                                : "text-rose-400"
+                          }`}
+                        >
+                          {result.is_control
+                            ? "control"
+                            : delta === undefined
+                              ? "—"
+                              : `${delta > 0 ? "+" : ""}${delta.toFixed(1)}%`}
+                        </td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
+              {experiment.recommendation && (
+                <div className="mt-2 rounded-md border border-emerald-400/25 bg-emerald-400/[0.07] px-2.5 py-2">
+                  <div className="text-[10px] uppercase tracking-wider text-emerald-300/70">
+                    Recommendation
+                  </div>
+                  <p className="mt-0.5 text-[11px] leading-snug text-white/85">
+                    {experiment.recommendation}
+                  </p>
+                </div>
+              )}
+              {experiment.diagnosis && (
+                <p className="mt-1.5 text-[10px] leading-snug text-white/40">
+                  {experiment.diagnosis}
+                </p>
+              )}
             </Panel>
           )}
 
@@ -705,7 +812,7 @@ export default function Page() {
 function BottleneckPanel({ bottlenecks }: { bottlenecks: Bottleneck[] }) {
   const [open, setOpen] = useState<number | null>(0);
   return (
-    <Panel title="7 · Bottlenecks" subtitle="Ranked, with attributed causes">
+    <Panel title="8 · Bottlenecks" subtitle="Ranked, with attributed causes">
       <div className="space-y-1.5">
         {bottlenecks.slice(0, 5).map((bottleneck) => (
           <div

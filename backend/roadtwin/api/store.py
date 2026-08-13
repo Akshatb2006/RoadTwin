@@ -17,7 +17,7 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from ..config import CACHE_DIR
-from ..contracts import RoadNetwork, RunStatus, Scenario, SimulationRun
+from ..contracts import Experiment, RoadNetwork, RunStatus, Scenario, SimulationRun
 
 MAX_WORKERS = max(2, min(8, (os.cpu_count() or 4) - 1))
 
@@ -28,6 +28,7 @@ _lock = threading.Lock()
 # losing run history is an acceptable trade for zero setup cost.
 _networks: dict[str, RoadNetwork] = {}
 _runs: dict[str, SimulationRun] = {}
+_experiments: dict[str, Experiment] = {}
 
 
 def get_executor() -> ProcessPoolExecutor:
@@ -158,3 +159,11 @@ def submit_run(
     run.status = RunStatus.RUNNING
     put_run(run)
     return run
+
+
+def put_experiment(experiment: Experiment) -> None:
+    _experiments[experiment.id] = experiment
+
+
+def get_experiment(experiment_id: str) -> Experiment | None:
+    return _experiments.get(experiment_id)

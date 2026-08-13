@@ -33,9 +33,10 @@ from ..contracts import (
     TimeseriesPoint,
     VehicleFrame,
 )
-from .analysis import find_bottlenecks
+from .analysis import explain_congestion, find_bottlenecks
 from .controllers import make_controller
 from .demand import generate_routes
+from .variant import build_widened_network
 from .geo import GeoProjector
 from .vtypes import build_vtype_xml
 
@@ -399,6 +400,11 @@ def run_simulation(
         if not net_path.exists():
             raise RuntimeError(f"SUMO network missing at {net_path}")
 
+        # A widening intervention needs a rebuilt network, not a runtime tweak.
+        if scenario.lane_additions:
+            net_path, widened = build_widened_network(network, scenario.lane_additions)
+            run.widened_segments = {k: list(v) for k, v in widened.items()}
+
         routes_path = generate_routes(
             net_path,
             lane_km=network.stats.lane_km,
@@ -535,6 +541,9 @@ def run_simulation(
         metrics.vehicles_loaded = loaded
         metrics.teleports = teleports
         metrics.vehicles_still_running = max(0, loaded - metrics.vehicles_arrived)
+        metrics.completion_rate = (
+            round(metrics.vehicles_arrived / loaded, 4) if loaded else 0.0
+        )
         if segment_metrics:
             metrics.max_queue_m = round(max(s.max_queue_m for s in segment_metrics), 1)
             metrics.total_queue_m = round(sum(s.max_queue_m for s in segment_metrics), 1)
@@ -543,6 +552,7 @@ def run_simulation(
         run.timeseries = timeseries
         run.segment_metrics = segment_metrics
         run.bottlenecks = find_bottlenecks(network, segment_metrics, scenario)
+        run.explanation = explain_congestion(run.bottlenecks, metrics)
         run.playback = frames
         run.sim_seconds = t
         run.wall_seconds = round(time.perf_counter() - started, 2)

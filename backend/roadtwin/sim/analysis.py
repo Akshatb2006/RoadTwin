@@ -144,11 +144,125 @@ def find_bottlenecks(
     return results
 
 
+def explain_congestion(bottlenecks: list[Bottleneck], metrics) -> str:
+    """Turn the computed cause shares into a sentence a planner can read.
+
+    Deliberately generated from the attribution numbers rather than by a
+    language model: the wording changes only when the evidence changes, and
+    every figure quoted here appears elsewhere in the result payload.
+    """
+    if not bottlenecks:
+        return (
+            "No segment fell below the congestion threshold: the network absorbed "
+            "this scenario without a persistent bottleneck."
+        )
+
+    worst = bottlenecks[0]
+    causes = list(worst.causes.items())
+    where = worst.name or f"segment {worst.segment_id}"
+
+    lead = (
+        f"The worst bottleneck is {where}, running at "
+        f"{worst.speed_ratio * 100:.0f}% of free-flow speed"
+    )
+    if worst.queue_m >= 10:
+        lead += f" with about {worst.queue_m:.0f} m of standing queue"
+    lead += "."
+
+    if causes:
+        primary, primary_share = causes[0]
+        detail = (
+            f" {primary} accounts for {primary_share * 100:.0f}% of the modelled cause"
+        )
+        if len(causes) > 1:
+            second, second_share = causes[1]
+            detail += f", followed by {second.lower()} at {second_share * 100:.0f}%"
+        if len(causes) > 2:
+            third, third_share = causes[2]
+            detail += f" and {third.lower()} at {third_share * 100:.0f}%"
+        detail += "."
+    else:
+        detail = ""
+
+    tail = ""
+    if getattr(metrics, "teleports", 0) >= 5:
+        tail = (
+            f" {metrics.teleports} vehicles had to be teleported out of gridlock, "
+            "so parts of the network are at or beyond capacity."
+        )
+    elif len(bottlenecks) > 1:
+        tail = f" {len(bottlenecks)} segments met the bottleneck threshold in total."
+
+    return lead + detail + tail
+
+
+def recommend_intervention(control, results) -> tuple[str, str, str | None]:
+    """Rank interventions measured against a control at identical demand.
+
+    Returns (diagnosis, recommendation, best_key). Ranking is on average delay,
+    with completion rate as the tie-breaker, because delay is what a road user
+    experiences and completion rate is the honest measure of how much of the
+    demand the network actually served.
+    """
+    candidates = [r for r in results if not r.is_control and not r.failed]
+    if not control or not candidates:
+        return ("", "No intervention completed successfully, so nothing can be ranked.", None)
+
+    def score(result):
+        return (result.metrics.avg_delay_s, -result.metrics.completion_rate)
+
+    ranked = sorted(candidates, key=score)
+    best = ranked[0]
+
+    base_delay = control.metrics.avg_delay_s or 0.0
+    delay_change = (
+        ((best.metrics.avg_delay_s - base_delay) / base_delay * 100) if base_delay else 0.0
+    )
+    completion_change = (
+        best.metrics.completion_rate - control.metrics.completion_rate
+    ) * 100
+
+    diagnosis = (
+        f"Under identical demand ({control.metrics.vehicles_loaded} vehicles loaded), "
+        f"the untreated network averages {control.metrics.avg_delay_s:.0f} s of delay per "
+        f"vehicle at {control.metrics.avg_speed_kmh:.1f} km/h and completes "
+        f"{control.metrics.completion_rate * 100:.1f}% of trips."
+    )
+
+    if delay_change < -1.0:
+        recommendation = (
+            f"Recommended intervention: {best.label}. It reduces average delay by "
+            f"{abs(delay_change):.1f}% ({control.metrics.avg_delay_s:.0f} s → "
+            f"{best.metrics.avg_delay_s:.0f} s)"
+        )
+        if completion_change > 0.2:
+            recommendation += (
+                f" and raises trip completion by {completion_change:.1f} percentage points"
+            )
+        recommendation += "."
+        if len(ranked) > 1:
+            runner_up = ranked[1]
+            recommendation += (
+                f" Next best is {runner_up.label} at "
+                f"{runner_up.metrics.avg_delay_s:.0f} s."
+            )
+    else:
+        recommendation = (
+            f"No tested intervention improved on the untreated network. The best of them, "
+            f"{best.label}, still averages {best.metrics.avg_delay_s:.0f} s of delay against "
+            f"{control.metrics.avg_delay_s:.0f} s. The constraint is unlikely to be the one "
+            "these interventions address."
+        )
+
+    return diagnosis, recommendation, best.key
+
+
 def compare_metrics(baseline, scenario_metrics) -> tuple[dict, dict, str]:
     """Baseline vs scenario deltas, plus a plain-language verdict."""
     fields = [
         "avg_speed_kmh", "avg_travel_time_s", "avg_delay_s", "max_queue_m",
         "throughput_veh_hr", "congestion_index", "vehicles_arrived", "total_co2_kg",
+        "completion_rate",
     ]
     deltas: dict[str, float] = {}
     deltas_pct: dict[str, float] = {}

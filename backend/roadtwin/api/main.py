@@ -13,10 +13,22 @@ from pydantic import BaseModel, Field
 
 from ..ai.planner import parse_scenario
 from ..config import PRESETS
-from ..contracts import BBox, Comparison, RoadNetwork, Scenario, SignalStrategy
+from ..contracts import (
+    BBox,
+    Comparison,
+    Experiment,
+    InterventionResult,
+    LaneAddition,
+    LaneClosure,
+    RoadNetwork,
+    RunStatus,
+    Scenario,
+    SignalStrategy,
+    SimulationRun,
+)
 from ..enrich.indian import enrich_network, network_summary
 from ..osm.build import build_network
-from ..sim.analysis import compare_metrics
+from ..sim.analysis import compare_metrics, recommend_intervention
 from . import store
 
 app = FastAPI(
@@ -59,6 +71,15 @@ class SweepRequest(BaseModel):
 
     network_id: str
     scenarios: list[Scenario] = Field(min_length=1, max_length=24)
+
+
+class ExperimentRequest(BaseModel):
+    """A control plus the interventions to test against it, at one demand."""
+
+    network_id: str
+    base_scenario: Scenario
+    interventions: list[str] = Field(default_factory=list, max_length=6)
+    target_segments: list[str] = Field(default_factory=list, max_length=8)
 
 
 class CompareRequest(BaseModel):
@@ -229,6 +250,125 @@ def create_sweep(request: SweepRequest) -> dict:
         "run_ids": [r.id for r in runs],
         "workers": store.MAX_WORKERS,
     }
+
+
+@app.post("/api/experiment")
+def create_experiment(request: ExperimentRequest) -> dict:
+    """Run a control plus N interventions at IDENTICAL demand, in parallel.
+
+    This is the methodological core of the product. Comparing "today" against
+    "peak demand + a lane closure" conflates two changes; comparing a control
+    against each intervention at the same demand isolates the intervention, so
+    the resulting statement -- "this lane reduces delay by X%" -- is defensible.
+    """
+    network = store.load_network(request.network_id)
+    if not network:
+        raise HTTPException(404, "Network not found")
+
+    base = request.base_scenario
+    targets = request.target_segments or _busiest_segments(network, 3)
+
+    variants: list[tuple[str, str, Scenario]] = [
+        ("control", "No intervention", base.model_copy(update={
+            "id": f"{base.id}_control", "name": "Control",
+            "lane_closures": [], "lane_additions": [], "incidents": [],
+            "signal_strategy": SignalStrategy.FIXED,
+        })),
+    ]
+
+    for key in request.interventions:
+        if key == "add_lane":
+            scenario = base.model_copy(update={
+                "id": f"{base.id}_addlane", "name": "Add one lane",
+                "lane_additions": [LaneAddition(segment_id=s, lanes_added=1) for s in targets],
+                "lane_closures": [], "signal_strategy": SignalStrategy.FIXED,
+            })
+            variants.append((key, "Add one lane", scenario))
+        elif key == "close_lane":
+            scenario = base.model_copy(update={
+                "id": f"{base.id}_closelane", "name": "Close one lane",
+                "lane_closures": [LaneClosure(segment_id=s, lanes_closed=1) for s in targets],
+                "lane_additions": [], "signal_strategy": SignalStrategy.FIXED,
+            })
+            variants.append((key, "Close one lane", scenario))
+        elif key in ("adaptive", "max_pressure"):
+            label = "Adaptive signals" if key == "adaptive" else "Max-pressure signals"
+            scenario = base.model_copy(update={
+                "id": f"{base.id}_{key}", "name": label,
+                "lane_closures": [], "lane_additions": [],
+                "signal_strategy": SignalStrategy(key),
+            })
+            variants.append((key, label, scenario))
+
+    runs = [
+        (key, label, store.submit_run(network, scenario, capture_playback=False))
+        for key, label, scenario in variants
+    ]
+
+    experiment = Experiment(
+        id=f"exp_{uuid.uuid4().hex[:8]}",
+        network_id=network.id,
+        demand_multiplier=base.demand_multiplier,
+        duration_s=base.duration_s,
+        control_run_id=runs[0][2].id,
+        results=[
+            InterventionResult(key=k, label=lbl, run_id=r.id, is_control=(k == "control"))
+            for k, lbl, r in runs
+        ],
+    )
+    store.put_experiment(experiment)
+    return experiment.model_dump()
+
+
+@app.get("/api/experiment/{experiment_id}")
+def get_experiment(experiment_id: str) -> dict:
+    """Poll an experiment; once every run lands, it carries its own verdict."""
+    experiment = store.get_experiment(experiment_id)
+    if not experiment:
+        raise HTTPException(404, "Experiment not found")
+
+    control = None
+    for result in experiment.results:
+        run = store.get_run(result.run_id)
+        if not run:
+            continue
+        result.failed = run.status is RunStatus.FAILED
+        if run.status is RunStatus.DONE:
+            result.metrics = run.metrics
+        if result.is_control:
+            control = result
+
+    if control and control.metrics.vehicles_loaded:
+        for result in experiment.results:
+            if result.is_control or result.failed:
+                continue
+            _, pct, _ = compare_metrics(control.metrics, result.metrics)
+            result.deltas_pct = pct
+
+    finished = all(
+        (store.get_run(r.run_id) or SimulationRun(id="", network_id="", scenario=Scenario(id="")))
+        .status in (RunStatus.DONE, RunStatus.FAILED)
+        for r in experiment.results
+    )
+    if finished and control:
+        diagnosis, recommendation, best = recommend_intervention(control, experiment.results)
+        experiment.diagnosis = diagnosis
+        experiment.recommendation = recommendation
+        experiment.best_key = best
+
+    payload = experiment.model_dump()
+    payload["finished"] = finished
+    return payload
+
+
+def _busiest_segments(network: RoadNetwork, count: int) -> list[str]:
+    """Highest-capacity corridor segments -- the ones worth intervening on."""
+    ranked = sorted(
+        network.segments,
+        key=lambda s: (s.lanes, s.length_m, s.speed_limit_kmh),
+        reverse=True,
+    )
+    return [s.id for s in ranked[:count]]
 
 
 @app.get("/api/runs/{run_id}")
