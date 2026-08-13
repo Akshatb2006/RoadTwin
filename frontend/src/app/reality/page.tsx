@@ -60,14 +60,37 @@ export default function RealityPage() {
           </div>
         )}
 
-        <div className="pointer-events-none absolute bottom-3 left-3 max-w-sm rounded-lg border border-white/10 bg-black/75 px-3 py-2 text-[11px] backdrop-blur">
-          <div className="mb-0.5 text-[10px] uppercase tracking-wider text-sky-300/70">
-            Provenance
+        <div className="pointer-events-none absolute left-3 top-3 w-64 rounded-lg border border-white/10 bg-black/80 px-3 py-2.5 text-[11px] backdrop-blur">
+          <div className="text-[10px] uppercase tracking-wider text-sky-300/70">
+            Reality view
           </div>
-          <p className="leading-snug text-white/60">
-            Mapillary street imagery → COLMAP structure-from-motion (44/45 frames
-            registered) → 3D Gaussian Splatting trained on Apple Metal. This is the
-            junction RoadTwin independently diagnoses as the worst bottleneck.
+          <div className="mt-0.5 text-sm font-semibold text-white">80 Feet Road</div>
+          <div className="text-[10px] text-white/40">Koramangala, Bengaluru</div>
+
+          <dl className="mt-2 space-y-1 border-t border-white/10 pt-2">
+            {[
+              ["Source", "Mapillary street imagery"],
+              ["Reconstruction", "COLMAP + 3D Gaussian Splatting"],
+              ["Registered frames", "44 / 45"],
+              ["Gaussians", "211,772"],
+              ["Rendering", "Apple Metal, in-browser"],
+            ].map(([k, v]) => (
+              <div key={k} className="flex justify-between gap-2">
+                <dt className="shrink-0 text-white/40">{k}</dt>
+                <dd className="text-right text-white/75">{v}</dd>
+              </div>
+            ))}
+          </dl>
+
+          {/* Stating the limitation is the point. The reconstruction has no
+              globally stable metric scale (Sim(3) fit against GPS: 74 m median
+              over a 268 m corridor), so we do not overlay simulated vehicles
+              and imply a precision we cannot support. */}
+          <p className="mt-2 border-t border-white/10 pt-2 leading-snug text-white/45">
+            The reconstruction follows the observed vehicle trajectory. It is
+            visual evidence of the real road — not a metric coordinate frame, so
+            simulated traffic is not overlaid onto it. SUMO remains the
+            metrically accurate layer.
           </p>
         </div>
       </div>

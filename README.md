@@ -131,6 +131,42 @@ of `localhost`, or over the LAN. The 403 body is HTML, so the browser reports
 it as *"Failed to load module script: non-JavaScript MIME type"*. curl will
 happily return 200 for the same URL because it sends no `Origin` header.
 
+## The reality layer, and what it deliberately does not claim
+
+A photorealistic reconstruction of the diagnosed corridor is built from
+crowd-sourced street imagery, entirely on Apple Silicon:
+
+    Mapillary -> COLMAP sparse SfM -> 3D Gaussian Splatting (Metal) -> browser
+
+| Gate | Result |
+|---|---|
+| COLMAP sparse reconstruction | 44 / 45 frames registered, 2,293 points |
+| Gaussian splat training | 211,772 splats, 7k iters, 1m46s, no CUDA |
+| Browser reality view | 52.5 MB streamed and rendered |
+| Drive-through camera | rides the 44 recovered poses |
+| **Metric Reality -> RoadTwin alignment** | **rejected — see below** |
+| SUMO vehicles inside the splat | **not claimed** |
+
+**Why the alignment was rejected.** A Sim(3) transform was solved in closed form
+(Umeyama) from 44 GPS-to-camera correspondences and scored in metres, not tuned
+by eye. It gives **74.2 m median error over a 268 m corridor**. GPS arc length
+is 269 m against a 64-unit COLMAP path, and the fit picks 2.90 m/unit where the
+arc lengths imply 4.21 — the reconstruction is not a similarity transform away
+from reality. Monocular forward-motion SfM without loop closure accumulates
+scale drift: locally faithful, globally warped.
+
+Shrinking the fitting window *looks* like a fix and is not. Windows of 8-20
+cameras reach sub-metre residuals, but only by adopting scale factors near
+34,000 m/unit — those camera centres are nearly coincident, so the fit is
+degenerate. Reporting residual alone would have shown "Gate 4 cleared".
+
+So the two layers share a **location, not a coordinate system**. The
+reconstruction is visual evidence of the real road; SUMO stays the metrically
+accurate layer. Overlaying simulated vehicles on the splat would imply a spatial
+precision the data cannot support, so we don't. GPS-constrained bundle
+adjustment and loop closure are the route to genuine metric fusion, and are
+future work rather than a claim.
+
 ## Architecture
 
 ```
