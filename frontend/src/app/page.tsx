@@ -43,9 +43,11 @@ type Geometry = {
 };
 
 export default function Page() {
-  // Simple by default. The full dashboard is the right depth for an engineer
-  // and the wrong first impression for the official making the decision.
-  const [advanced, setAdvanced] = useState(false);
+  // Full dashboard by default. The three-screen simple view removed too much:
+  // it hid the controlled experiments, the demand sweep and the causal
+  // attribution -- which are the product, not decoration. Simplification has to
+  // mean plainer language and progressive disclosure, not amputation.
+  const [advanced, setAdvanced] = useState(true);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [presetKey, setPresetKey] = useState("koramangala");
   const [network, setNetwork] = useState<NetworkSummary | null>(null);
