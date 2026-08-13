@@ -22,7 +22,7 @@ export default function RealityPage() {
   const [active, setActive] = useState<string | null>(null);
   // Photographs by default. The Gaussian reconstruction is available behind a
   // toggle as evidence the pipeline works, but it is not the thing to show.
-  const [mode, setMode] = useState<"photo" | "splat">("photo");
+  const [mode, setMode] = useState<"photo" | "anime" | "splat">("anime");
 
   useEffect(() => {
     fetch(`${API_BASE}/api/reality/scenes`)
@@ -42,19 +42,19 @@ export default function RealityPage() {
             Road<span className="text-sky-400">Twin</span>
           </Link>
           <span className="text-[11px] text-white/40">
-            {mode === "photo"
-              ? "Reality view — 80 Feet Road, Koramangala: the street RoadTwin diagnoses"
-              : "Reality view — Gaussian reconstruction (research artifact)"}
+            {mode === "splat"
+              ? "Reality view — Gaussian reconstruction (research artifact)"
+              : "Reality view — 80 Feet Road, Koramangala: the street RoadTwin diagnoses"}
           </span>
         </div>
         <div className="flex items-center gap-3 text-[11px] text-white/45">
           <span>
-            {mode === "photo"
-              ? "431 frames · Mapillary"
-              : `${scenes[0]?.size_mb ?? 42} MB · 168,889 splats`}
+            {mode === "splat"
+              ? `${scenes[0]?.size_mb ?? 42} MB · 168,889 splats`
+              : "431 frames · Mapillary"}
           </span>
           <div className="flex overflow-hidden rounded-md border border-white/15">
-            {(["photo", "splat"] as const).map((m) => (
+            {(["anime", "photo", "splat"] as const).map((m) => (
               <button
                 key={m}
                 onClick={() => setMode(m)}
@@ -62,7 +62,11 @@ export default function RealityPage() {
                   mode === m ? "bg-sky-500 text-white" : "text-white/70 hover:bg-white/5"
                 }`}
               >
-                {m === "photo" ? "Street imagery" : "3D reconstruction"}
+                {m === "anime"
+                  ? "Anime"
+                  : m === "photo"
+                    ? "Street imagery"
+                    : "3D reconstruction"}
               </button>
             ))}
           </div>
@@ -77,8 +81,8 @@ export default function RealityPage() {
 
       <div className="relative min-h-0 flex-1">
         {active ? (
-          mode === "photo" ? (
-            <StreetDriveThrough sceneId="seq2016_dense" />
+          mode === "photo" || mode === "anime" ? (
+            <StreetDriveThrough sceneId="seq2016_dense" anime={mode === "anime"} />
           ) : (
             <RealityViewer sceneId={active} />
           )
@@ -101,7 +105,14 @@ export default function RealityPage() {
             {[
               ["Source", "Mapillary street imagery"],
               ["Corridor", "3.2 km, 431 frames"],
-              ["Mode", mode === "photo" ? "Photographs, capture order" : "Gaussian splat"],
+              [
+                "Mode",
+                mode === "anime"
+                  ? "Cel-shaded, real-time"
+                  : mode === "photo"
+                    ? "Photographs, capture order"
+                    : "Gaussian splat",
+              ],
               ["Reconstruction", "COLMAP + 3DGS (Apple Metal)"],
               ["Registered frames", "44 / 45"],
             ].map(([k, v]) => (
@@ -117,7 +128,9 @@ export default function RealityPage() {
               over a 268 m corridor), so we do not overlay simulated vehicles
               and imply a precision we cannot support. */}
           <p className="mt-2 border-t border-white/10 pt-2 leading-snug text-white/45">
-            {mode === "photo"
+            {mode === "anime"
+              ? "The real photographs, cel-shaded live in the browser. The shader restyles what the camera saw — it does not invent geometry, so every vehicle and lane marking is where it actually was."
+              : mode === "photo"
               ? "These are the actual photographs of the diagnosed bottleneck, played in capture order. Real imagery, no reconstruction — the road as it is."
               : "Reconstruction from forward-only imagery: well constrained along the driven path, weak away from it, and without globally stable scale (74 m median Sim(3) error). Shown as pipeline evidence, not as a metric frame."}
           </p>

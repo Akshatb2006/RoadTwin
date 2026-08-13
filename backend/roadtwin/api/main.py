@@ -478,8 +478,16 @@ def reality_frame(scene_id: str, filename: str) -> FileResponse:
     path = (base / scene_id / "images" / filename).resolve()
     if not str(path).startswith(str(base)) or not path.exists():
         raise HTTPException(404, "Frame not found")
-    return FileResponse(path, media_type="image/jpeg",
-                        headers={"Cache-Control": "public, max-age=86400"})
+    # Vary: Origin is essential here. The plain <img> in photo mode fetches
+    # without an Origin header, so the response is cached WITHOUT CORS headers;
+    # the WebGL canvas then requests the same URL with crossOrigin and is served
+    # that cached copy, which the browser rejects. Without Vary the anime filter
+    # renders black and the cause looks like a shader bug.
+    return FileResponse(
+        path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400", "Vary": "Origin"},
+    )
 
 
 @app.get("/api/reality/{scene_id}/splat")

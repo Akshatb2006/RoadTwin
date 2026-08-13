@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { API_BASE } from "@/lib/api";
+
+const AnimeFilter = dynamic(() => import("@/components/AnimeFilter"), { ssr: false });
 
 type Frame = {
   file: string;
@@ -20,7 +23,13 @@ type Frame = {
  * reconstruction was built from, played in capture order -- so what a viewer
  * sees is unambiguously the real road, at full photographic fidelity.
  */
-export default function StreetDriveThrough({ sceneId }: { sceneId: string }) {
+export default function StreetDriveThrough({
+  sceneId,
+  anime = false,
+}: {
+  sceneId: string;
+  anime?: boolean;
+}) {
   const [frames, setFrames] = useState<Frame[]>([]);
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(true);
@@ -76,14 +85,20 @@ export default function StreetDriveThrough({ sceneId }: { sceneId: string }) {
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-black">
-      {current && (
-        <img
-          src={`${API_BASE}${current.url}`}
-          alt="80 Feet Road, Koramangala"
-          className="h-full w-full object-cover"
-          draggable={false}
-        />
-      )}
+      {current &&
+        (anime ? (
+          <AnimeFilter
+            src={`${API_BASE}${current.url}`}
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <img
+            src={`${API_BASE}${current.url}`}
+            alt="80 Feet Road, Koramangala"
+            className="h-full w-full object-cover"
+            draggable={false}
+          />
+        ))}
 
       {!ready && (
         <div className="absolute inset-0 flex items-center justify-center">
