@@ -27,10 +27,6 @@ type Props = {
   highlightSignals?: Array<{ lat: number; lon: number }>;
   /** Building footprints with heights -- the physical layer. */
   buildings?: GeoJSON.FeatureCollection | null;
-  /** Street-level cel-shaded fly-through of the diagnosed corridor. */
-  cinematic?: boolean;
-  /** [lon, lat] polyline the cinematic camera follows. */
-  flightPath?: [number, number][];
   /** Tilt the camera and extrude buildings. */
   threeD?: boolean;
 };
@@ -64,8 +60,6 @@ export default function MapView({
   highlightSignals = [],
   buildings = null,
   threeD = false,
-  cinematic = false,
-  flightPath = [],
 }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
@@ -73,9 +67,6 @@ export default function MapView({
   const [hovered, setHovered] = useState<Record<string, unknown> | null>(null);
   const frameRef = useRef(frameIndex);
   const rafRef = useRef<number | null>(null);
-  const filmRef = useRef<HTMLCanvasElement>(null);
-  const styleStopRef = useRef<null | (() => void)>(null);
-  const flightRef = useRef({ t: 0, raf: 0 as number, running: false });
 
   // ---------------------------------------------------------------- init
   useEffect(() => {
@@ -99,10 +90,7 @@ export default function MapView({
       center: [center?.lon ?? 77.62, center?.lat ?? 12.935],
       zoom: 14,
       attributionControl: false,
-      maxPitch: 85,
-      // Required to sample the map canvas as a texture for the cel-shading
-      // pass; without it the buffer is cleared before it can be read.
-      canvasContextAttributes: { preserveDrawingBuffer: true },
+      maxPitch: 70,
     });
 
     instance.addControl(new maplibregl.NavigationControl({ showCompass: true }), "top-right");
@@ -427,69 +415,6 @@ export default function MapView({
     });
   }, [highlightSignals, ready]);
 
-  // ------------------------------------------------------------- cinematic
-  useEffect(() => {
-    const instance = map.current;
-    if (!instance || !ready) return;
-
-    if (!cinematic) {
-      flightRef.current.running = false;
-      if (flightRef.current.raf) cancelAnimationFrame(flightRef.current.raf);
-      styleStopRef.current?.();
-      styleStopRef.current = null;
-      return;
-    }
-
-    // Drop to eye level on the road. Rooftop views read as a map; street level
-    // reads as being in the city.
-    instance.easeTo({ pitch: 78, zoom: 18.2, duration: 1600 });
-
-    // Cel-shade the live map. Here the shader is styling a scene that is
-    // already legible, rather than covering for one that is not.
-    const source = instance.getCanvas();
-    const target = filmRef.current;
-    if (target) {
-      import("@/lib/animeFilter").then(({ attachAnimeFilter }) => {
-        styleStopRef.current = attachAnimeFilter(source, target);
-      });
-    }
-
-    // Fly along the diagnosed corridor, facing the direction of travel.
-    if (flightPath.length > 1) {
-      flightRef.current.running = true;
-      flightRef.current.t = 0;
-      const bearingOf = (a: [number, number], b: [number, number]) =>
-        (Math.atan2(b[0] - a[0], b[1] - a[1]) * 180) / Math.PI;
-      const step = () => {
-        if (!flightRef.current.running) return;
-        flightRef.current.raf = requestAnimationFrame(step);
-        flightRef.current.t = (flightRef.current.t + 0.00055) % 1;
-        const f = flightRef.current.t * (flightPath.length - 1);
-        const i = Math.floor(f);
-        const frac = f - i;
-        const a = flightPath[i];
-        const b = flightPath[Math.min(i + 1, flightPath.length - 1)];
-        // pitch and zoom must be set here, not via easeTo: the first jumpTo
-        // cancels any running camera animation, so an ease would be killed at
-        // t=0 and the camera would stay flat at the default zoom.
-        instance.jumpTo({
-          center: [a[0] + (b[0] - a[0]) * frac, a[1] + (b[1] - a[1]) * frac],
-          bearing: bearingOf(a, b),
-          pitch: 78,
-          zoom: 18.2,
-        });
-      };
-      flightRef.current.raf = requestAnimationFrame(step);
-    }
-
-    return () => {
-      flightRef.current.running = false;
-      if (flightRef.current.raf) cancelAnimationFrame(flightRef.current.raf);
-      styleStopRef.current?.();
-      styleStopRef.current = null;
-    };
-  }, [cinematic, ready, flightPath]);
-
   // -------------------------------------------------------------- playback
   useEffect(() => {
     frameRef.current = frameIndex;
@@ -526,14 +451,6 @@ export default function MapView({
   return (
     <div className="relative h-full w-full">
       <div ref={container} className="h-full w-full" />
-      {/* Cel-shaded overlay. Sits above the map and is the only thing visible
-          in cinematic mode; pointer events pass through to the map beneath. */}
-      <canvas
-        ref={filmRef}
-        className={`pointer-events-none absolute inset-0 h-full w-full ${
-          cinematic ? "" : "hidden"
-        }`}
-      />
 
       {hovered && (
         <div className="pointer-events-none absolute left-3 top-3 max-w-xs rounded-lg border border-white/10 bg-black/80 px-3 py-2 text-xs backdrop-blur">

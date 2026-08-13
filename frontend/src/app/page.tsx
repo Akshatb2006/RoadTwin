@@ -78,7 +78,6 @@ export default function Page() {
   const [playing, setPlaying] = useState(false);
   const [showBasemap, setShowBasemap] = useState(false);
   const [threeD, setThreeD] = useState(false);
-  const [cinematic, setCinematic] = useState(false);
   const [buildings, setBuildings] = useState<GeoJSON.FeatureCollection | null>(null);
   const [buildingInfo, setBuildingInfo] = useState<Record<string, unknown> | null>(null);
 
@@ -262,25 +261,6 @@ export default function Page() {
 
   const worst = baseline?.bottlenecks?.[0] ?? null;
 
-  /** Camera path along the diagnosed corridor, taken from its real geometry. */
-  const flightPath = useMemo<[number, number][]>(() => {
-    if (!geometry) return [];
-    const wanted = new Set(diagnosedSegments);
-    const pts: [number, number][] = [];
-    for (const f of geometry.roads.features) {
-      if (!wanted.has(f.properties?.id as string)) continue;
-      if (f.geometry.type !== "LineString") continue;
-      for (const c of f.geometry.coordinates) pts.push([c[0], c[1]] as [number, number]);
-    }
-    if (pts.length > 1) return pts;
-    // Before a baseline exists, fly the longest arterial so the mode still works.
-    const arterial = geometry.roads.features
-      .filter((f) => f.geometry.type === "LineString" && f.properties?.lanes >= 2)
-      .sort((a, b) => (b.properties?.length_m ?? 0) - (a.properties?.length_m ?? 0))[0];
-    return arterial && arterial.geometry.type === "LineString"
-      ? (arterial.geometry.coordinates.map((c) => [c[0], c[1]]) as [number, number][])
-      : [];
-  }, [geometry, diagnosedSegments]);
   const ranked = useMemo(
     () =>
       (experiment?.results ?? [])
@@ -308,22 +288,6 @@ export default function Page() {
             <span className="hidden md:inline">
               {workers} simulation workers · SUMO 1.27
             </span>
-          )}
-          {network && (
-            <button
-              onClick={() => {
-                const next = !cinematic;
-                setCinematic(next);
-                if (next) setThreeD(true);
-              }}
-              className={`rounded-md px-2.5 py-1 text-[11px] font-medium ${
-                cinematic
-                  ? "bg-sky-500 text-white"
-                  : "border border-sky-400/40 bg-sky-400/10 text-sky-200 hover:bg-sky-400/20"
-              }`}
-            >
-              {cinematic ? "◼ Exit cinematic" : "▶ Cinematic view"}
-            </button>
           )}
           {network && (
             <Link
@@ -464,8 +428,6 @@ export default function Page() {
             highlightSignals={highlightSignals}
             buildings={buildings}
             threeD={threeD}
-            cinematic={cinematic}
-            flightPath={flightPath}
           />
 
           {!network && !building && (
