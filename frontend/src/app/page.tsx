@@ -71,6 +71,7 @@ export default function Page() {
     "max_pressure",
   ]);
 
+  const [focusKey, setFocusKey] = useState<string | null>(null);
   const [frames, setFrames] = useState<PlaybackFrame[]>([]);
   const [frameIndex, setFrameIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -226,6 +227,37 @@ export default function Page() {
 
   const frameVehicles = frames[frameIndex]?.v.length ?? 0;
 
+  /** The segments the baseline diagnosed as bottlenecks -- what we intervene on. */
+  const diagnosedSegments = useMemo(
+    () => (baseline?.bottlenecks ?? []).slice(0, 3).map((b) => b.segment_id),
+    [baseline],
+  );
+
+  // Selecting an intervention shows WHERE it acts: the widened/closed roads for
+  // a geometry change, the signalised junctions for a control change.
+  const highlightSegments = useMemo(() => {
+    if (focusKey === "add_lane" || focusKey === "close_lane") return diagnosedSegments;
+    return [];
+  }, [focusKey, diagnosedSegments]);
+
+  const highlightSignals = useMemo(() => {
+    if (focusKey === "adaptive" || focusKey === "max_pressure") {
+      return (network?.signals ?? []).map((s) => ({ lat: s.lat, lon: s.lon }));
+    }
+    return [];
+  }, [focusKey, network]);
+
+  const worst = baseline?.bottlenecks?.[0] ?? null;
+  const ranked = useMemo(
+    () =>
+      (experiment?.results ?? [])
+        .filter((r) => !r.is_control && !r.failed)
+        .slice()
+        .sort((a, b) => a.metrics.avg_delay_s - b.metrics.avg_delay_s),
+    [experiment],
+  );
+  const control = experiment?.results.find((r) => r.is_control) ?? null;
+
   return (
     <main className="flex h-screen w-screen flex-col overflow-hidden bg-[#05070c] text-white">
       {/* ------------------------------------------------------------ header */}
@@ -300,10 +332,11 @@ export default function Page() {
               </div>
               <div className="mt-2 rounded-lg border border-emerald-400/20 bg-emerald-400/[0.06] px-3 py-2">
                 <div className="text-[10px] uppercase tracking-wider text-emerald-300/70">
-                  Modelling effort avoided
+                  Manual modeling effort avoided
                 </div>
                 <div className="mt-0.5 text-lg font-semibold text-emerald-300">
-                  ~{stats.manual_effort_hours_estimate.toFixed(0)} h → {((buildMs ?? 0) / 1000).toFixed(1)} s
+                  ~{stats.manual_effort_hours_estimate.toFixed(0)} hours →{" "}
+                  {((buildMs ?? 0) / 1000).toFixed(1)} sec
                 </div>
                 <p className="mt-1 text-[10px] leading-snug text-white/35">
                   Estimated manual build at 0.5 h/junction + 0.2 h/km of coded link
@@ -314,7 +347,10 @@ export default function Page() {
           )}
 
           {enrichment && (
-            <Panel title="3 · Indian road semantics" subtitle="Derived per segment">
+            <Panel
+              title="3 · Indian road semantics"
+              subtitle="Estimated capacity and heterogeneous-road behaviour"
+            >
               <div className="grid grid-cols-2 gap-1.5">
                 <Stat
                   label="Capacity lost"
@@ -352,6 +388,8 @@ export default function Page() {
             frameIndex={frameIndex}
             onFrameChange={setFrameIndex}
             showBasemap={showBasemap}
+            highlightSegments={highlightSegments}
+            highlightSignals={highlightSignals}
           />
 
           {!network && !building && (
@@ -421,6 +459,204 @@ export default function Page() {
 
         {/* ------------------------------------------------------- right rail */}
         <aside className="w-[340px] shrink-0 space-y-3 overflow-y-auto border-l border-white/10 p-3">
+          {/* Stage 2: once a baseline exists, the rail leads with what we
+              learned about the road rather than with more controls. */}
+          {worst && (
+            <Panel
+              title="Baseline diagnosis"
+              subtitle="What the simulation found, before changing anything"
+            >
+              <div className="rounded-lg border border-rose-400/30 bg-rose-500/[0.07] px-3 py-2">
+                <div className="text-[10px] uppercase tracking-wider text-rose-300/80">
+                  Worst bottleneck
+                </div>
+                <div className="mt-0.5 truncate text-sm font-semibold text-white">
+                  {worst.name}
+                </div>
+                <div className="mt-1.5 grid grid-cols-2 gap-2">
+                  <div>
+                    <div className="text-[10px] text-white/40">Speed</div>
+                    <div className="text-base font-semibold tabular-nums text-rose-300">
+                      {(worst.speed_ratio * 100).toFixed(0)}%
+                      <span className="ml-1 text-[10px] font-normal text-white/40">
+                        of free-flow
+                      </span>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-white/40">Queue</div>
+                    <div className="text-base font-semibold tabular-nums text-rose-300">
+                      {worst.queue_m.toFixed(0)}
+                      <span className="ml-1 text-[10px] font-normal text-white/40">m</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-2 text-[10px] uppercase tracking-wider text-white/40">
+                Why
+              </div>
+              <div className="mt-1 space-y-1">
+                {Object.entries(worst.causes).map(([cause, share]) => (
+                  <div key={cause} className="flex items-center gap-2">
+                    <span className="w-32 shrink-0 truncate text-[10px] text-white/60">
+                      {cause}
+                    </span>
+                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/10">
+                      <div
+                        className="h-full rounded-full bg-rose-400/80"
+                        style={{ width: `${share * 100}%` }}
+                      />
+                    </div>
+                    <span className="w-8 shrink-0 text-right text-[10px] tabular-nums text-white/60">
+                      {(share * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {baseline?.explanation && (
+                <p className="mt-2 rounded-md bg-white/[0.04] px-2.5 py-2 text-[11px] leading-snug text-white/80">
+                  {baseline.explanation}
+                </p>
+              )}
+            </Panel>
+          )}
+
+          <Panel
+            title="Intervention lab"
+            subtitle="What should we test?"
+          >
+            {/* The methodology is the differentiator, so it is stated on screen
+                rather than left implicit in the numbers. */}
+            <div className="mb-2 rounded-md border border-sky-400/25 bg-sky-400/[0.06] px-2.5 py-1.5">
+              <div className="text-[10px] uppercase tracking-wider text-sky-300/80">
+                Controlled experiment
+              </div>
+              <div className="mt-0.5 grid grid-cols-2 gap-x-2 text-[10px] text-white/60">
+                <span>✓ Same demand</span>
+                <span>✓ Same fleet mix</span>
+                <span>✓ Same random seed</span>
+                <span>✓ Same duration</span>
+              </div>
+              <div className="mt-0.5 text-[10px] text-sky-300/70">
+                Only the intervention changes.
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              {([
+                ["add_lane", "Add one lane", "Widen the diagnosed bottleneck (network rebuilt)"],
+                ["adaptive", "Adaptive signals", "Queue-responsive green times"],
+                ["max_pressure", "Max-pressure signals", "Throughput-maximising control"],
+                ["close_lane", "Close one lane", "Negative control / roadworks"],
+              ] as [InterventionKey, string, string][]).map(([key, label, hint]) => (
+                <label
+                  key={key}
+                  onMouseEnter={() => setFocusKey(key)}
+                  onMouseLeave={() => setFocusKey(null)}
+                  className="flex cursor-pointer items-start gap-2 rounded-md border border-white/10 bg-white/[0.02] px-2 py-1.5 hover:border-sky-400/40"
+                >
+                  <input
+                    type="checkbox"
+                    checked={interventions.includes(key)}
+                    onChange={() => toggleIntervention(key)}
+                    className="mt-0.5 accent-sky-400"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-[11px] text-white/85">{label}</span>
+                    <span className="block text-[10px] leading-snug text-white/35">{hint}</span>
+                  </span>
+                </label>
+              ))}
+              {!baseline && (
+                <p className="text-[10px] leading-snug text-amber-300/70">
+                  Run the baseline first — interventions are aimed at the bottlenecks it
+                  finds, not at whichever road is largest.
+                </p>
+              )}
+              <Button
+                onClick={runExperiment}
+                disabled={!network || experimenting || interventions.length === 0}
+                className="w-full"
+              >
+                {experimenting
+                  ? `Running ${interventions.length + 1} simulations in parallel…`
+                  : `Compare ${interventions.length} interventions`}
+              </Button>
+            </div>
+          </Panel>
+
+          {experiment && ranked.length > 0 && (
+            <Panel
+              title="Intervention leaderboard"
+              subtitle={`Ranked by average delay at ${(experiment.demand_multiplier * 100).toFixed(0)}% demand`}
+            >
+              <div className="space-y-1.5">
+                {ranked.map((result, index) => {
+                  const delay = result.deltas_pct?.avg_delay_s;
+                  const completionPp = control
+                    ? (result.metrics.completion_rate - control.metrics.completion_rate) * 100
+                    : 0;
+                  const medal = ["🏆", "🥈", "🥉"][index] ?? "  ";
+                  return (
+                    <button
+                      key={result.key}
+                      onMouseEnter={() => setFocusKey(result.key)}
+                      onMouseLeave={() => setFocusKey(null)}
+                      onClick={() =>
+                        setFocusKey(focusKey === result.key ? null : result.key)
+                      }
+                      className={`flex w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition ${
+                        index === 0
+                          ? "border-emerald-400/40 bg-emerald-400/[0.08]"
+                          : "border-white/10 bg-white/[0.02] hover:bg-white/[0.05]"
+                      }`}
+                    >
+                      <span className="text-sm">{medal}</span>
+                      <span className="min-w-0 flex-1 text-[11px] leading-tight text-white/90">
+                        {result.label}
+                      </span>
+                      <span className="shrink-0 text-right">
+                        <span
+                          className={`block text-[12px] font-semibold tabular-nums ${
+                            (delay ?? 0) < 0 ? "text-emerald-300" : "text-rose-300"
+                          }`}
+                        >
+                          {delay === undefined
+                            ? "—"
+                            : `${delay > 0 ? "+" : ""}${delay.toFixed(1)}%`}
+                        </span>
+                        <span className="block text-[9px] tabular-nums text-white/40">
+                          delay · {completionPp > 0 ? "+" : ""}
+                          {completionPp.toFixed(1)} pp
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {experiment.recommendation && (
+                <div className="mt-2 rounded-lg border border-emerald-400/35 bg-emerald-400/[0.1] px-3 py-2.5">
+                  <div className="text-[10px] uppercase tracking-wider text-emerald-300/80">
+                    Recommended intervention
+                  </div>
+                  <p className="mt-1 text-[11px] leading-snug text-white/90">
+                    {experiment.recommendation}
+                  </p>
+                </div>
+              )}
+              {experiment.diagnosis && (
+                <p className="mt-1.5 text-[10px] leading-snug text-white/40">
+                  {experiment.diagnosis}
+                </p>
+              )}
+              <p className="mt-1.5 text-[10px] text-white/30">
+                Hover a row to highlight where that intervention acts on the map.
+              </p>
+            </Panel>
+          )}
+
           <Panel title="4 · Ask in plain English" subtitle="Parsed into a validated scenario">
             <textarea
               value={prompt}
@@ -543,54 +779,9 @@ export default function Page() {
             </div>
           </Panel>
 
-          <Panel
-            title="6 · Intervention lab"
-            subtitle="Every option runs at the SAME demand, so the difference is the intervention"
-          >
-            <div className="space-y-1.5">
-              {([
-                ["add_lane", "Add one lane", "Widen the diagnosed bottleneck (network rebuilt)"],
-                ["adaptive", "Adaptive signals", "Queue-responsive green times"],
-                ["max_pressure", "Max-pressure signals", "Throughput-maximising control"],
-                ["close_lane", "Close one lane", "Negative control / roadworks"],
-              ] as [InterventionKey, string, string][]).map(([key, label, hint]) => (
-                <label
-                  key={key}
-                  className="flex cursor-pointer items-start gap-2 rounded-md border border-white/10 bg-white/[0.02] px-2 py-1.5"
-                >
-                  <input
-                    type="checkbox"
-                    checked={interventions.includes(key)}
-                    onChange={() => toggleIntervention(key)}
-                    className="mt-0.5 accent-sky-400"
-                  />
-                  <span className="min-w-0">
-                    <span className="block text-[11px] text-white/85">{label}</span>
-                    <span className="block text-[10px] leading-snug text-white/35">{hint}</span>
-                  </span>
-                </label>
-              ))}
-              {!baseline && (
-                <p className="text-[10px] leading-snug text-amber-300/70">
-                  Run the baseline first — interventions are aimed at the bottlenecks it
-                  finds, not at whichever road is largest.
-                </p>
-              )}
-              <Button
-                onClick={runExperiment}
-                disabled={!network || experimenting || interventions.length === 0}
-                className="w-full"
-              >
-                {experimenting
-                  ? `Running ${interventions.length + 1} simulations in parallel…`
-                  : `Compare ${interventions.length} interventions`}
-              </Button>
-            </div>
-          </Panel>
-
           {metrics && (
             <Panel
-              title="7 · Results"
+              title="6 · Results"
               subtitle={
                 current
                   ? `${current.sim_seconds.toFixed(0)}s simulated in ${current.wall_seconds.toFixed(1)}s (${current.realtime_factor.toFixed(0)}× realtime)`
@@ -670,85 +861,6 @@ export default function Page() {
             </Panel>
           )}
 
-          {experiment && experiment.results.length > 0 && (
-            <Panel
-              title="Controlled comparison"
-              subtitle={`All runs at ${(experiment.demand_multiplier * 100).toFixed(0)}% demand · ${Math.round(experiment.duration_s / 60)} min`}
-            >
-              <table className="w-full text-[11px]">
-                <thead className="text-white/40">
-                  <tr>
-                    <th className="text-left font-normal">Intervention</th>
-                    <th className="text-right font-normal">Delay</th>
-                    <th className="text-right font-normal">Speed</th>
-                    <th className="text-right font-normal">vs control</th>
-                  </tr>
-                </thead>
-                <tbody className="tabular-nums">
-                  {experiment.results.map((result) => {
-                    const delta = result.deltas_pct?.avg_delay_s;
-                    const best = experiment.best_key === result.key;
-                    return (
-                      <tr
-                        key={result.key}
-                        className={
-                          best
-                            ? "text-emerald-300"
-                            : result.is_control
-                              ? "text-white/50"
-                              : "text-white/80"
-                        }
-                      >
-                        <td className="py-0.5">
-                          {best && "★ "}
-                          {result.label}
-                        </td>
-                        <td className="text-right">
-                          {result.failed ? "—" : `${result.metrics.avg_delay_s.toFixed(0)}s`}
-                        </td>
-                        <td className="text-right">
-                          {result.failed
-                            ? "—"
-                            : `${result.metrics.avg_speed_kmh.toFixed(1)}`}
-                        </td>
-                        <td
-                          className={`text-right ${
-                            delta === undefined
-                              ? "text-white/30"
-                              : delta < 0
-                                ? "text-emerald-400"
-                                : "text-rose-400"
-                          }`}
-                        >
-                          {result.is_control
-                            ? "control"
-                            : delta === undefined
-                              ? "—"
-                              : `${delta > 0 ? "+" : ""}${delta.toFixed(1)}%`}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              {experiment.recommendation && (
-                <div className="mt-2 rounded-md border border-emerald-400/25 bg-emerald-400/[0.07] px-2.5 py-2">
-                  <div className="text-[10px] uppercase tracking-wider text-emerald-300/70">
-                    Recommendation
-                  </div>
-                  <p className="mt-0.5 text-[11px] leading-snug text-white/85">
-                    {experiment.recommendation}
-                  </p>
-                </div>
-              )}
-              {experiment.diagnosis && (
-                <p className="mt-1.5 text-[10px] leading-snug text-white/40">
-                  {experiment.diagnosis}
-                </p>
-              )}
-            </Panel>
-          )}
-
           {chartData.length > 1 && (
             <Panel title="Network speed over time">
               <ResponsiveContainer width="100%" height={130}>
@@ -812,7 +924,7 @@ export default function Page() {
 function BottleneckPanel({ bottlenecks }: { bottlenecks: Bottleneck[] }) {
   const [open, setOpen] = useState<number | null>(0);
   return (
-    <Panel title="8 · Bottlenecks" subtitle="Ranked, with attributed causes">
+    <Panel title="7 · Bottlenecks" subtitle="Ranked, with attributed causes">
       <div className="space-y-1.5">
         {bottlenecks.slice(0, 5).map((bottleneck) => (
           <div

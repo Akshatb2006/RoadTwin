@@ -21,6 +21,10 @@ type Props = {
   frameIndex: number;
   onFrameChange: (index: number) => void;
   showBasemap: boolean;
+  /** Segments an intervention acts on -- drawn as a glow so "where" is obvious. */
+  highlightSegments?: string[];
+  /** Signals an intervention re-times. */
+  highlightSignals?: Array<{ lat: number; lon: number }>;
 };
 
 const EMPTY: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
@@ -48,6 +52,8 @@ export default function MapView({
   frameIndex,
   onFrameChange,
   showBasemap,
+  highlightSegments = [],
+  highlightSignals = [],
 }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
@@ -94,6 +100,7 @@ maxPitch: 60,
       instance.addSource("junctions", { type: "geojson", data: EMPTY });
       instance.addSource("vehicles", { type: "geojson", data: EMPTY });
       instance.addSource("bottlenecks", { type: "geojson", data: EMPTY });
+      instance.addSource("highlight-signals", { type: "geojson", data: EMPTY });
 
       // Wide soft casing underneath gives the network depth on a dark canvas.
       instance.addLayer({
@@ -145,6 +152,39 @@ maxPitch: 60,
             "#3a4a63",
           ],
           "circle-opacity": 0.85,
+        },
+      });
+
+      // Where the selected intervention acts. Filtered from the roads source so
+      // no second copy of the geometry is needed.
+      instance.addLayer({
+        id: "highlight-roads",
+        type: "line",
+        source: "roads",
+        filter: ["in", ["get", "id"], ["literal", []]],
+        paint: {
+          "line-color": "#7dd3fc",
+          "line-width": [
+            "interpolate", ["linear"], ["zoom"],
+            12, ["*", ["coalesce", ["get", "lanes"], 1], 2.2],
+            17, ["*", ["coalesce", ["get", "lanes"], 1], 7.0],
+          ],
+          "line-opacity": 0.55,
+          "line-blur": 2.5,
+        },
+        layout: { "line-cap": "round", "line-join": "round" },
+      });
+      instance.addLayer({
+        id: "highlight-signals",
+        type: "circle",
+        source: "highlight-signals",
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 13, 7, 17, 16],
+          "circle-color": "#7dd3fc",
+          "circle-opacity": 0.28,
+          "circle-blur": 0.6,
+          "circle-stroke-color": "#7dd3fc",
+          "circle-stroke-width": 1.2,
         },
       });
 
@@ -307,6 +347,30 @@ maxPitch: 60,
         })),
     });
   }, [bottlenecks, ready]);
+
+  // ------------------------------------------------------------- highlight
+  useEffect(() => {
+    const instance = map.current;
+    if (!instance || !ready || !instance.getLayer("highlight-roads")) return;
+    instance.setFilter("highlight-roads", [
+      "in",
+      ["get", "id"],
+      ["literal", highlightSegments],
+    ]);
+  }, [highlightSegments, ready]);
+
+  useEffect(() => {
+    const instance = map.current;
+    if (!instance || !ready) return;
+    (instance.getSource("highlight-signals") as maplibregl.GeoJSONSource | undefined)?.setData({
+      type: "FeatureCollection",
+      features: highlightSignals.map((s) => ({
+        type: "Feature" as const,
+        geometry: { type: "Point" as const, coordinates: [s.lon, s.lat] },
+        properties: {},
+      })),
+    });
+  }, [highlightSignals, ready]);
 
   // -------------------------------------------------------------- playback
   useEffect(() => {
