@@ -7,16 +7,16 @@ COLMAP that does not require CUDA. Dense MVS does, and we never run it.
 
 Two choices matter for a dashcam-style capture:
 
-* SEQUENTIAL matching, not exhaustive. Frames arrive in capture order, so image
-  N only needs comparing against its neighbours. Exhaustive matching on 152
-  frames is 11,476 pairs against roughly 1,500 for sequential -- hours versus
-  minutes, for a worse result.
+* EXHAUSTIVE matching. This was measured, not assumed: sequential matching
+  registered 10 of 152 frames, exhaustive registered 44 of 45 on a contiguous
+  run. The mapper diagnostics blamed forward-motion geometry, which was a red
+  herring -- the pairs simply were not being generated.
 * SIMPLE_RADIAL with a shared intrinsic. Every frame comes from the same
   physical camera on the same drive, so solving one intrinsic across all frames
   is both faster and better-conditioned than solving 152 of them.
 
-Loop detection is enabled because a corridor driven in both directions gives
-revisits that dramatically stabilise the reconstruction.
+Frames must be CONTIGUOUS. A set selected by distance-from-a-point contains
+temporal jumps, and the mapper cannot bridge them.
 """
 
 from __future__ import annotations
@@ -76,13 +76,17 @@ def reconstruct(
         raise RuntimeError(f"feature_extractor failed ({code}):\n{tail}")
 
     # ---- 2. matching ----
+    # EXHAUSTIVE, not sequential -- established empirically. Sequential matching
+    # registered 10 of 152 frames; exhaustive matching over a contiguous run
+    # registered 44 of 45. The failure was never the dashcam geometry, which is
+    # what the mapper diagnostics appeared to blame. Sequential pairing simply
+    # does not generate the links this capture needs at ~7 m spacing.
+    # Cost is acceptable: O(n^2) is ~990 pairs at 45 frames (24 s) and ~11.5k
+    # pairs at 152 frames (a few minutes) on CPU.
     match = [
-        COLMAP, "sequential_matcher",
+        COLMAP, "exhaustive_matcher",
         "--database_path", str(database),
         "--FeatureMatching.use_gpu", "1" if use_gpu else "0",
-        "--SequentialMatching.overlap", "12",
-        "--SequentialMatching.quadratic_overlap", "1",
-        "--SequentialMatching.loop_detection", "0",
     ]
     code, tail = _run(match, log)
     if code != 0:
@@ -96,6 +100,18 @@ def reconstruct(
         "--output_path", str(sparse),
         "--Mapper.ba_global_function_tolerance", "1e-5",
         "--Mapper.multiple_models", "0",
+        # Dashcam geometry. COLMAP's defaults assume an orbital capture and
+        # actively reject a straight drive: init_max_forward_motion=0.95 throws
+        # out pairs that are mostly forward translation, and a 16 deg minimum
+        # triangulation angle is unreachable when the camera moves toward the
+        # scene. With the defaults the mapper never initialises -- it registered
+        # 4 of 152 images and fell back to structure-less pose for the rest.
+        "--Mapper.init_min_tri_angle", "1.5",
+        "--Mapper.init_max_forward_motion", "1.0",
+        "--Mapper.filter_min_tri_angle", "0.5",
+        "--Mapper.init_min_num_inliers", "30",
+        "--Mapper.abs_pose_min_num_inliers", "12",
+        "--Mapper.min_num_matches", "10",
     ]
     if list_path:
         mapper += ["--Mapper.image_list_path", str(list_path)]
@@ -123,11 +139,14 @@ def summarise(work_dir: Path, seconds: float = 0.0) -> dict:
     registered = 0
     images_txt = text_dir / "images.txt"
     if images_txt.exists():
+        # images.txt stores TWO lines per registered image: a pose line ending in
+        # the filename, then its 2D observations. Counting "lines with >8 tokens"
+        # counted both, so the reported figure was never the image count.
         registered = sum(
             1
             for line in images_txt.read_text(errors="ignore").splitlines()
-            if line and not line.startswith("#") and len(line.split()) > 8
-        ) // 1
+            if line and not line.startswith("#") and line.strip().lower().endswith((".jpg", ".png"))
+        )
 
     points = 0
     points_txt = text_dir / "points3D.txt"
